@@ -192,8 +192,10 @@ second screen"), not strip-cut positions. Counts are an approximation of
 that which breaks precisely on the transitions the feature exists for.
 
 place.py disposition: state fixed manually (work split = `[1,2,0]`);
-no model rework there (subsumed by this plan); the ~5-line drift guard is
-documented as an optional stopgap (TASK.md, update 2026-11-03).
+no model rework there (subsumed by this plan). The drift-guard stopgap
+(principle 4's count-era proxy) was implemented in place.py on
+2026-11-03: `layout.arrive()` distrusts splits summing past the open
+workspaces; regression tests added (52/52 green).
 
 ## 7. Upstream process
 

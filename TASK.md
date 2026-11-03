@@ -67,9 +67,10 @@ state remediated manually (work split = `[1,2,0]`).
 Decision:
 - **No model rework in place.py** (the id-blocks fix is subsumed by the
   niri integration; don't build it twice). place.py stays the daily driver
-  until the integration lands; if the drift bites again meanwhile, the
-  stopgap is a ~5-line drift guard in `layout.arrive()` (distrust splits
-  whose sum > occupied workspaces) — documented, not implemented.
+  until the integration lands. The drift-guard stopgap **was implemented**
+  on 2026-11-03: `layout.arrive()` distrusts splits whose sum exceeds the
+  open workspaces (place.py logs when it fires); 3 regression tests added
+  to test_layout.py (suite 52/52 green).
 - The lessons are binding for `arrangement.rs` / upstream design:
   see PLAN.md §6.7 (identity-based memory, death propagation,
   last-known-role seeding).
