@@ -55,6 +55,28 @@ Matrix/Discussion post to probe the design question (see "The one question").
 section be acceptable — or only config-declared (wizard writes config)?"
 Get this verdict before writing any feature code.
 
+## Update 2026-11-03 — place.py incident informs the design
+
+place.py mis-placed a workspace (Zen) at the work setup: a stale
+*count-based* split (`[2,2,0]`, drifted on 10-29 by an incidental workspace
+and mirrored into the setup's memory while settled) hijacked the arrival
+and overrode the correct `[1,2,0]` cut. Analyzed and replayed red/green
+against `layout.py` (replay script: /tmp/place-debug/replay_arrival.py);
+state remediated manually (work split = `[1,2,0]`).
+
+Decision:
+- **No model rework in place.py** (the id-blocks fix is subsumed by the
+  niri integration; don't build it twice). place.py stays the daily driver
+  until the integration lands; if the drift bites again meanwhile, the
+  stopgap is a ~5-line drift guard in `layout.arrive()` (distrust splits
+  whose sum > occupied workspaces) — documented, not implemented.
+- The lessons are binding for `arrangement.rs` / upstream design:
+  see PLAN.md §6.7 (identity-based memory, death propagation,
+  last-known-role seeding).
+- The incident is also empirical evidence for Part 1: what the user
+  experiences is *role affinity* ("Zen belongs on the 2nd screen"),
+  never a strip cut position.
+
 ## Pointers
 
 - place sources: `~/.config/niri/place/` (layout.py = pure state machine +

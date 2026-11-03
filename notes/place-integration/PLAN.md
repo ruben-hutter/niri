@@ -151,6 +151,50 @@ Discussion *before* writing feature code.
 - Restart semantics: place's way (persist splits only; re-adopt open strip
   on start; cut on first expanded arrival) — needs no new identity scheme.
 
+### 6.7 Design amendment from the field (2026-11-03): identity-based memory
+
+A real failure in place.py (the tool this plan ports) demonstrated the
+model weakness that the Rust port must not inherit. Stenogram: a setup's
+remembered split was count-based (`[2,2,0]`); an incidental workspace had
+drifted it on 10-29; the workspace later died at another setup, but the
+stored counts never learned of the death; the stale cut then hijacked the
+next arrival and put a workspace on the wrong monitor. Replay-proven
+against the pure module (red on stored split, green on the correct one).
+
+Binding principles for `arrangement.rs`:
+
+1. **Arrangement memory references identity, never bare counts.** Per
+   setup, store id-blocks (workspace ids per role monitor). Counts are a
+   derived value kept only as the cross-session seed — workspace ids die
+   with the session (`migrate` drops blocks, keeps counts, as place.py
+   already does).
+2. **Death propagation.** Closing a workspace must purge the id from
+   every setup's blocks (and recompute that setup's derived counts).
+   Counts alone cannot know which block a dead workspace belonged to —
+   this was the root defect.
+3. **Last-known-role seeding.** Maintain a per-workspace `last_role` map
+   (niri-native analog: `last_active_workspace_id`, `src/layout/mod.rs:358`).
+   On arrival: use the setup's blocks where they exist; workspaces the
+   setup has never seen get seeded by their last-known role.
+4. **Drift guard.** Distrust any memory that references dead state; the
+   cheap count-era proxy (reject a split whose sum > occupied workspaces)
+   is worth carrying as an invariant/assertion even with id-blocks.
+5. **Cross-session identity stays lossy** (no stable workspace id across
+   reboot). If upstream wants more, a fingerprint bridge (match restored
+   workspaces by sorted `app_id`s) is the natural extension — and Part 1
+   (declared roles) shrinks what must be learned in the first place:
+   with roles declared, workspaces get an authoritative role target and
+   the learned part of the model gets smaller.
+
+Why this matters for the upstream conversation: the failure shows the
+user-experienced model is **role affinity** ("this app belongs on my
+second screen"), not strip-cut positions. Counts are an approximation of
+that which breaks precisely on the transitions the feature exists for.
+
+place.py disposition: state fixed manually (work split = `[1,2,0]`);
+no model rework there (subsumed by this plan); the ~5-line drift guard is
+documented as an optional stopgap (TASK.md, update 2026-11-03).
+
 ## 7. Upstream process
 
 - Discuss before code; Matrix #niri:matrix.org or Discussions; frame around
