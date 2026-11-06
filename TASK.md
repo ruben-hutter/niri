@@ -13,10 +13,38 @@ Scratch context for this branch (`notes/place-integration`). Full plan:
 Bring the `place` workflow (`~/.config/niri/place/`, workspace arrangement by
 monitor role across setup changes) into niri proper — staged, upstreamable.
 
-## Status (2026-10-31)
+## Status (2026-11-06)
 
-Research + positioning done, **no code written**. Next step: human-written
-Matrix/Discussion post to probe the design question (see "The one question").
+**Strategy pivot (2026-11-06):** no Matrix post after all. Build the part
+that "fits" niri without pre-discussion (Part 1 roles) and submit the
+persisted-setups part as a separate PR, accepting it may be rejected.
+
+**PR1 implemented** on `feat/output-roles` (branched off fresh
+upstream/main @ 2c0b311b), commit `4819b69f`, awaiting ruben's review:
+
+- `output { role N }` — lower role = more important; lowest connected
+  role becomes `primary_idx` (ties broken by config order, like
+  focus-at-startup). No roles configured → behavior byte-identical
+  (primary_idx was provably always 0).
+- Effects (inherited from existing primary_idx uses): orphaned-workspace
+  fallback, startup focus default (focus-at-startup still wins).
+- Implementation: `Layout` stores `niri_config::Outputs` and resolves
+  roles itself (set in `new`/`update_config`, recomputed on add/remove
+  output) — no `add_output`/`Monitor::new` signature changes. New
+  `Outputs::find_with_position()` in niri-config powers the config-order
+  tiebreak in both layout and niri.rs.
+- Tests: 5 in `src/layout/tests.rs` + 1 in `src/tests/output_role.rs`
+  + extended config parse snapshot; wiki `### role` section added.
+  254/254 niri, 38/38 niri-config, 3/3 niri-ipc green; fmt+clippy clean
+  (remaining clippy warnings are pre-existing upstream).
+- Scope decisions (2026-11-06 session): PR1 changes ONLY primary_idx
+  semantics; wizard dropped entirely for now; PR2 = arrangement engine
+  + opt-in persisted setups; ruben reviews/rewrites all code before any
+  PR (he owns it per the LLM policy tension — his call).
+
+Next: ruben reviews PR1. Before PR2 code: present concrete scenario
+examples for the trigger-surface decision (when does arrangement
+redistribution kick in), per ruben's request.
 
 ## Decisions so far
 
