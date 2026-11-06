@@ -39,7 +39,8 @@ use std::time::Duration;
 use monitor::{InsertHint, InsertPosition, InsertWorkspace, MonitorAddWindowTarget};
 use niri_config::utils::MergeWith as _;
 use niri_config::{
-    Config, CornerRadius, LayoutPart, PresetSize, Workspace as WorkspaceConfig, WorkspaceReference,
+    Config, CornerRadius, LayoutPart, OutputName, Outputs, PresetSize,
+    Workspace as WorkspaceConfig, WorkspaceReference,
 };
 use niri_ipc::{ColumnDisplay, PositionChange, SizeChange, WindowLayout};
 use scrolling::{Column, ColumnWidth};
@@ -343,6 +344,8 @@ pub trait LayoutElement {
 pub struct Layout<W: LayoutElement> {
     /// Monitors and workspaes in the layout.
     monitor_set: MonitorSet<W>,
+    /// Configured outputs, used to resolve output roles.
+    outputs_config: Outputs,
     /// Whether the layout should draw as active.
     ///
     /// This normally indicates that the layout has keyboard focus, but not always. E.g. when the
@@ -381,7 +384,8 @@ enum MonitorSet<W: LayoutElement> {
     Normal {
         /// Connected monitors.
         monitors: Vec<Monitor<W>>,
-        /// Index of the primary monitor.
+        /// Index of the primary monitor: the monitor with the lowest output role (ties broken by
+        /// config order), or the first monitor if no monitor has a role configured.
         primary_idx: usize,
         /// Index of the active monitor.
         active_monitor_idx: usize,
@@ -391,6 +395,29 @@ enum MonitorSet<W: LayoutElement> {
         /// The workspaces.
         workspaces: Vec<Workspace<W>>,
     },
+}
+
+/// Returns the role configured for an output, together with the position of the output's entry in
+/// the config, if a role is set.
+fn output_role(output: &Output, config: &Outputs) -> Option<(u32, usize)> {
+    let name = output.user_data().get::<OutputName>()?;
+    let (pos, o) = config.find_with_position(name)?;
+    o.role.map(|role| (role, pos))
+}
+
+/// Returns the index of the primary monitor.
+///
+/// The primary monitor is the monitor with the lowest output role, with ties broken by the order
+/// of the outputs in the config. If no monitor has a role configured, the first monitor wins.
+fn primary_monitor_idx(monitors: &[Monitor<impl LayoutElement>], config: &Outputs) -> usize {
+    monitors
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, mon)| {
+            output_role(&mon.output, config).map(|(role, pos)| (role, pos, idx))
+        })
+        .min()
+        .map_or(0, |(_, _, idx)| idx)
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -720,6 +747,7 @@ impl<W: LayoutElement> Layout<W> {
     pub fn with_options(clock: Clock, options: Options) -> Self {
         Self {
             monitor_set: MonitorSet::NoOutputs { workspaces: vec![] },
+            outputs_config: Outputs::default(),
             is_active: true,
             last_active_workspace_id: HashMap::new(),
             interactive_move: None,
@@ -745,6 +773,7 @@ impl<W: LayoutElement> Layout<W> {
 
         Self {
             monitor_set: MonitorSet::NoOutputs { workspaces },
+            outputs_config: config.outputs.clone(),
             is_active: true,
             last_active_workspace_id: HashMap::new(),
             interactive_move: None,
@@ -761,8 +790,8 @@ impl<W: LayoutElement> Layout<W> {
         self.monitor_set = match mem::take(&mut self.monitor_set) {
             MonitorSet::Normal {
                 mut monitors,
-                primary_idx,
                 active_monitor_idx,
+                ..
             } => {
                 let new_output_idx = monitors.len();
                 let mut workspaces = vec![];
@@ -846,6 +875,8 @@ impl<W: LayoutElement> Layout<W> {
                 monitor.set_overview_progress(self.overview_progress.as_ref());
                 monitors.push(monitor);
 
+                let primary_idx = primary_monitor_idx(&monitors, &self.outputs_config);
+
                 MonitorSet::Normal {
                     monitors,
                     primary_idx,
@@ -879,8 +910,8 @@ impl<W: LayoutElement> Layout<W> {
         self.monitor_set = match mem::take(&mut self.monitor_set) {
             MonitorSet::Normal {
                 mut monitors,
-                mut primary_idx,
                 mut active_monitor_idx,
+                ..
             } => {
                 let idx = monitors
                     .iter()
@@ -905,17 +936,15 @@ impl<W: LayoutElement> Layout<W> {
 
                     MonitorSet::NoOutputs { workspaces }
                 } else {
-                    if primary_idx >= idx {
-                        // Update primary_idx to either still point at the same monitor, or at some
-                        // other monitor if the primary has been removed.
-                        primary_idx = primary_idx.saturating_sub(1);
-                    }
                     if active_monitor_idx >= idx {
                         // Update active_monitor_idx to either still point at the same monitor, or
                         // at some other monitor if the active monitor has
                         // been removed.
                         active_monitor_idx = active_monitor_idx.saturating_sub(1);
                     }
+
+                    // Recompute the primary monitor, which may have been the removed one.
+                    let primary_idx = primary_monitor_idx(&monitors, &self.outputs_config);
 
                     for target_idx in 0..monitors.len() {
                         let target_workspaces = workspaces
@@ -1635,6 +1664,22 @@ impl<W: LayoutElement> Layout<W> {
                 }
             }
         }
+    }
+
+    /// Returns the primary monitor output, if any monitors are connected.
+    ///
+    /// This is the output with the lowest role (ties broken by config order), or the first
+    /// monitor if no monitor has a role configured.
+    pub fn primary_output(&self) -> Option<&Output> {
+        let MonitorSet::Normal {
+            monitors,
+            primary_idx,
+            ..
+        } = &self.monitor_set
+        else {
+            return None;
+        };
+        Some(&monitors[*primary_idx].output)
     }
 
     pub fn active_output(&self) -> Option<&Output> {
@@ -2992,6 +3037,8 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn update_config(&mut self, config: &Config) {
+        self.outputs_config = config.outputs.clone();
+
         // Update workspace-specific config for all named workspaces.
         for ws in self.workspaces_mut() {
             let Some(name) = ws.name() else { continue };
@@ -3001,6 +3048,21 @@ impl<W: LayoutElement> Layout<W> {
         }
 
         self.update_options(Options::from_config(config));
+
+        // The primary monitor may have changed if the output roles changed.
+        self.update_primary_monitor_idx();
+    }
+
+    fn update_primary_monitor_idx(&mut self) {
+        let MonitorSet::Normal {
+            monitors,
+            primary_idx,
+            ..
+        } = &mut self.monitor_set
+        else {
+            return;
+        };
+        *primary_idx = primary_monitor_idx(monitors, &self.outputs_config);
     }
 
     fn update_options(&mut self, options: Options) {

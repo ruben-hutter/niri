@@ -1137,13 +1137,29 @@ impl State {
     }
 
     pub fn focus_default_monitor(&mut self) {
-        // Our default target is the first output in sorted order.
-        let Some(mut target) = self.niri.sorted_outputs.first().cloned() else {
+        let config = self.niri.config.borrow();
+
+        // Our default target is the primary monitor: the output with the lowest role (ties
+        // broken by config order), or the first output in sorted order if no output has a role
+        // configured.
+        let Some(mut target) = self
+            .niri
+            .sorted_outputs
+            .iter()
+            .filter_map(|output| {
+                let name = output.user_data().get::<OutputName>().unwrap();
+                let (pos, c) = config.outputs.find_with_position(name)?;
+                let role = c.role?;
+                Some((role, pos, output))
+            })
+            .min_by_key(|(role, pos, _)| (*role, *pos))
+            .map(|(_, _, output)| output.clone())
+            .or_else(|| self.niri.sorted_outputs.first().cloned())
+        else {
             // No outputs are connected.
             return;
         };
 
-        let config = self.niri.config.borrow();
         for config in &config.outputs.0 {
             if !config.focus_at_startup {
                 continue;

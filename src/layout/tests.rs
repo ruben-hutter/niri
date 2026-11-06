@@ -2525,6 +2525,215 @@ fn config_change_updates_cached_sizes() {
     layout.verify_invariants();
 }
 
+fn make_output_config(name: &str, role: Option<u32>) -> niri_config::Output {
+    niri_config::Output {
+        name: name.to_string(),
+        role,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn output_role_determines_primary_monitor() {
+    let mut config = Config::default();
+    config
+        .outputs
+        .0
+        .push(make_output_config("output1", Some(2)));
+    config
+        .outputs
+        .0
+        .push(make_output_config("output2", Some(1)));
+
+    let mut layout = Layout::new(Clock::default(), &config);
+
+    Op::AddOutput(1).apply(&mut layout);
+    Op::AddOutput(2).apply(&mut layout);
+
+    let MonitorSet::Normal {
+        monitors,
+        primary_idx,
+        ..
+    } = &layout.monitor_set
+    else {
+        unreachable!()
+    };
+    assert_eq!(*primary_idx, 1);
+    assert_eq!(monitors[*primary_idx].output_name(), "output2");
+
+    // Removing the first monitor must keep the primary pointing at output2.
+    Op::RemoveOutput(1).apply(&mut layout);
+
+    let MonitorSet::Normal {
+        monitors,
+        primary_idx,
+        ..
+    } = &layout.monitor_set
+    else {
+        unreachable!()
+    };
+    assert_eq!(*primary_idx, 0);
+    assert_eq!(monitors[*primary_idx].output_name(), "output2");
+
+    // Removing the primary itself must move the primary to the remaining monitor.
+    Op::AddOutput(3).apply(&mut layout);
+    Op::RemoveOutput(2).apply(&mut layout);
+
+    let MonitorSet::Normal {
+        monitors,
+        primary_idx,
+        ..
+    } = &layout.monitor_set
+    else {
+        unreachable!()
+    };
+    assert_eq!(*primary_idx, 0);
+    assert_eq!(monitors[*primary_idx].output_name(), "output3");
+
+    layout.verify_invariants();
+}
+
+#[test]
+fn output_role_tie_prefers_config_order() {
+    let mut config = Config::default();
+    config
+        .outputs
+        .0
+        .push(make_output_config("output2", Some(1)));
+    config
+        .outputs
+        .0
+        .push(make_output_config("output1", Some(1)));
+
+    let mut layout = Layout::new(Clock::default(), &config);
+
+    Op::AddOutput(1).apply(&mut layout);
+    Op::AddOutput(2).apply(&mut layout);
+
+    let MonitorSet::Normal {
+        monitors,
+        primary_idx,
+        ..
+    } = &layout.monitor_set
+    else {
+        unreachable!()
+    };
+    assert_eq!(*primary_idx, 1);
+    assert_eq!(monitors[*primary_idx].output_name(), "output2");
+
+    layout.verify_invariants();
+}
+
+#[test]
+fn no_output_roles_first_monitor_is_primary() {
+    let mut layout = Layout::default();
+
+    Op::AddOutput(1).apply(&mut layout);
+    Op::AddOutput(2).apply(&mut layout);
+
+    let MonitorSet::Normal {
+        monitors: _,
+        primary_idx,
+        ..
+    } = &layout.monitor_set
+    else {
+        unreachable!()
+    };
+    assert_eq!(*primary_idx, 0);
+
+    // Removing the primary monitor must fall back to the first monitor.
+    Op::RemoveOutput(1).apply(&mut layout);
+
+    let MonitorSet::Normal {
+        monitors,
+        primary_idx,
+        ..
+    } = &layout.monitor_set
+    else {
+        unreachable!()
+    };
+    assert_eq!(*primary_idx, 0);
+    assert_eq!(monitors[*primary_idx].output_name(), "output2");
+
+    layout.verify_invariants();
+}
+
+#[test]
+fn output_role_change_updates_primary_monitor() {
+    let mut config = Config::default();
+    config
+        .outputs
+        .0
+        .push(make_output_config("output1", Some(2)));
+    config
+        .outputs
+        .0
+        .push(make_output_config("output2", Some(1)));
+
+    let mut layout = Layout::new(Clock::default(), &config);
+
+    Op::AddOutput(1).apply(&mut layout);
+    Op::AddOutput(2).apply(&mut layout);
+
+    // Make output1 more important than output2 and reload the config.
+    config.outputs.0[0].role = Some(0);
+    layout.update_config(&config);
+
+    let MonitorSet::Normal {
+        monitors,
+        primary_idx,
+        ..
+    } = &layout.monitor_set
+    else {
+        unreachable!()
+    };
+    assert_eq!(*primary_idx, 0);
+    assert_eq!(monitors[*primary_idx].output_name(), "output1");
+
+    // Removing all roles must fall back to the first monitor.
+    config.outputs.0.clear();
+    layout.update_config(&config);
+
+    let MonitorSet::Normal { primary_idx, .. } = &layout.monitor_set else {
+        unreachable!()
+    };
+    assert_eq!(*primary_idx, 0);
+
+    layout.verify_invariants();
+}
+
+#[test]
+fn orphaned_workspaces_prefer_primary_monitor() {
+    let mut config = Config::default();
+    config
+        .outputs
+        .0
+        .push(make_output_config("output3", Some(1)));
+
+    let mut layout = Layout::new(Clock::default(), &config);
+
+    Op::AddOutput(1).apply(&mut layout);
+    Op::AddOutput(2).apply(&mut layout);
+    Op::AddOutput(3).apply(&mut layout);
+    Op::FocusOutput(2).apply(&mut layout);
+    Op::AddWindow {
+        params: TestWindowParams::new(1),
+    }
+    .apply(&mut layout);
+
+    // The window has no preferred output among the remaining monitors, so after removing its
+    // monitor it must land on the primary monitor (output3).
+    Op::RemoveOutput(2).apply(&mut layout);
+
+    layout.verify_invariants();
+
+    let MonitorSet::Normal { monitors, .. } = &layout.monitor_set else {
+        unreachable!()
+    };
+    assert!(monitors[0].workspaces.iter().all(|ws| !ws.has_windows()));
+    assert!(monitors[1].workspaces.iter().any(|ws| ws.has_windows()));
+}
+
 #[test]
 fn preset_height_change_removes_preset() {
     let mut config = Config::default();

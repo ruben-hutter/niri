@@ -14,6 +14,7 @@ output "eDP-1" {
     position x=1280 y=0
     variable-refresh-rate // on-demand=true
     focus-at-startup
+    // role 1
     backdrop-color "#001100"
     // max-bpc 8
 
@@ -234,7 +235,7 @@ Focus this output by default when niri starts.
 
 If multiple outputs with `focus-at-startup` are connected, they are prioritized in the order that they appear in the config.
 
-When none of the connected outputs are explicitly `focus-at-startup`, niri will focus the first one sorted by name (same output sorting as used elsewhere in niri).
+When none of the connected outputs are explicitly `focus-at-startup`, niri will focus the connected output with the lowest [`role`](#role), or the first one sorted by name (same output sorting as used elsewhere in niri) if no output has a role configured.
 
 ```kdl
 // Focus HDMI-A-1 by default.
@@ -245,6 +246,38 @@ output "HDMI-A-1" {
 // ...if HDMI-A-1 wasn't connected, focus DP-2 instead.
 output "DP-2" {
     focus-at-startup
+}
+```
+
+### `role`
+
+<sup>Since: next release</sup>
+
+Set the role of this output: a number where a lower role means a more important output.
+
+The connected output with the lowest role becomes the **primary monitor**:
+
+- It is focused at startup, unless some connected output has [`focus-at-startup`](#focus-at-startup) set.
+- When an output is disconnected, its workspaces that have no other preferred output are moved to it.
+
+If several connected outputs share the lowest role, they are prioritized in the order that they appear in the config.
+
+For example, with a laptop and two external monitors, you can make the external monitors more important:
+
+```kdl
+// The main monitor.
+output "DP-1" {
+    role 1
+}
+
+// The side monitor.
+output "DP-2" {
+    role 2
+}
+
+// The laptop panel: least important.
+output "eDP-1" {
+    role 3
 }
 ```
 
