@@ -784,6 +784,36 @@ impl<W: LayoutElement> Monitor<W> {
         self.clean_up_workspaces();
     }
 
+    /// Like [`append_workspaces()`], but inserts the workspaces in front of the existing ones,
+    /// keeping the currently focused workspace focused.
+    pub fn prepend_workspaces(&mut self, mut workspaces: Vec<Workspace<W>>) {
+        if workspaces.is_empty() {
+            return;
+        }
+
+        for ws in &mut workspaces {
+            ws.set_output(Some(self.output.clone()));
+            ws.update_config(self.options.clone());
+        }
+
+        let count = workspaces.len();
+        self.workspaces.splice(0..0, workspaces);
+        self.active_workspace_idx += count;
+
+        // If empty_workspace_above_first is set and the first workspace is now no longer empty,
+        // add a new empty workspace on top.
+        if self.options.layout.empty_workspace_above_first
+            && self.workspaces[0].has_windows_or_name()
+        {
+            self.add_workspace_top();
+        }
+
+        // FIXME: if we're adding workspaces to currently invisible positions
+        // (outside the workspace switch), we don't need to cancel it.
+        self.workspace_switch = None;
+        self.clean_up_workspaces();
+    }
+
     pub fn move_down_or_to_workspace_down(&mut self) {
         if !self.active_workspace().move_down() {
             self.move_to_workspace_down(ActivateWindow::Smart);

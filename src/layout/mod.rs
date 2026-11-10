@@ -51,6 +51,7 @@ use smithay::output::{self, Output};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Point, Rectangle, Scale, Serial, Size, Transform};
 use tile::{Tile, TileRenderElement};
+use tracing::debug;
 use workspace::{WorkspaceAddWindowTarget, WorkspaceId};
 
 pub use self::monitor::MonitorRenderElement;
@@ -418,6 +419,22 @@ fn primary_monitor_idx(monitors: &[Monitor<impl LayoutElement>], config: &Output
         })
         .min()
         .map_or(0, |(_, _, idx)| idx)
+}
+
+/// Returns a short description of an output for logging, including its configured role.
+fn output_desc(output: &Output, config: &Outputs) -> String {
+    match output_role(output, config) {
+        Some((role, pos)) => format!("{} (role {role}, config #{pos})", output.name()),
+        None => format!("{} (no role)", output.name()),
+    }
+}
+
+/// Returns a short label identifying a workspace in logs: its name, or its ID if unnamed.
+fn ws_label(ws: &Workspace<impl LayoutElement>) -> String {
+    match ws.name() {
+        Some(name) => name.clone(),
+        None => format!("#{}", ws.id().get()),
+    }
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -790,7 +807,7 @@ impl<W: LayoutElement> Layout<W> {
         self.monitor_set = match mem::take(&mut self.monitor_set) {
             MonitorSet::Normal {
                 mut monitors,
-                active_monitor_idx,
+                mut active_monitor_idx,
                 ..
             } => {
                 let new_output_idx = monitors.len();
@@ -861,6 +878,18 @@ impl<W: LayoutElement> Layout<W> {
                 }
                 workspaces.reverse();
 
+                if !workspaces.is_empty() {
+                    let labels = workspaces
+                        .iter()
+                        .map(ws_label)
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    debug!(
+                        "moving workspace(s) [{labels}] to new output {} (preferred output)",
+                        output_desc(&output, &self.outputs_config)
+                    );
+                }
+
                 let ws_id_to_activate = self.last_active_workspace_id.remove(&output.name());
 
                 let mut monitor = Monitor::new(
@@ -877,6 +906,20 @@ impl<W: LayoutElement> Layout<W> {
 
                 let primary_idx = primary_monitor_idx(&monitors, &self.outputs_config);
 
+                // With output roles configured, focus moves to the primary monitor when the
+                // newly added output becomes the primary one. Without roles, the primary is
+                // always the first monitor, which a newly added output never is.
+                if primary_idx == new_output_idx {
+                    active_monitor_idx = primary_idx;
+                }
+
+                debug!(
+                    "added output {}; primary monitor: {}, active monitor: {}",
+                    output_desc(&monitors[new_output_idx].output, &self.outputs_config),
+                    output_desc(&monitors[primary_idx].output, &self.outputs_config),
+                    output_desc(&monitors[active_monitor_idx].output, &self.outputs_config),
+                );
+
                 MonitorSet::Normal {
                     monitors,
                     primary_idx,
@@ -884,6 +927,11 @@ impl<W: LayoutElement> Layout<W> {
                 }
             }
             MonitorSet::NoOutputs { workspaces } => {
+                debug!(
+                    "added first output {}",
+                    output_desc(&output, &self.outputs_config)
+                );
+
                 let ws_id_to_activate = self.last_active_workspace_id.remove(&output.name());
 
                 let mut monitor = Monitor::new(
@@ -907,6 +955,11 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn remove_output(&mut self, output: &Output) {
+        debug!(
+            "removing output {}",
+            output_desc(output, &self.outputs_config)
+        );
+
         self.monitor_set = match mem::take(&mut self.monitor_set) {
             MonitorSet::Normal {
                 mut monitors,
@@ -917,12 +970,18 @@ impl<W: LayoutElement> Layout<W> {
                     .iter()
                     .position(|mon| &mon.output == output)
                     .expect("trying to remove non-existing output");
+                let old_primary_idx = primary_monitor_idx(&monitors, &self.outputs_config);
                 let monitor = monitors.remove(idx);
 
-                self.last_active_workspace_id.insert(
-                    monitor.output_name().clone(),
-                    monitor.workspaces[monitor.active_workspace_idx].id(),
-                );
+                let was_active = active_monitor_idx == idx;
+                let removed_active_ws_id = monitor.workspaces[monitor.active_workspace_idx].id();
+                // Only follow the active workspace if it has something to show.
+                let follow_active_ws =
+                    monitor.workspaces[monitor.active_workspace_idx].has_windows_or_name();
+                let removed_role = output_role(output, &self.outputs_config);
+
+                self.last_active_workspace_id
+                    .insert(monitor.output_name().clone(), removed_active_ws_id);
 
                 let mut workspaces = monitor.into_workspaces();
 
@@ -933,6 +992,11 @@ impl<W: LayoutElement> Layout<W> {
                         // Reset base options to layout ones.
                         ws.update_config(self.options.clone());
                     }
+
+                    debug!(
+                        "removed last output, keeping {} workspace(s)",
+                        workspaces.len()
+                    );
 
                     MonitorSet::NoOutputs { workspaces }
                 } else {
@@ -947,7 +1011,7 @@ impl<W: LayoutElement> Layout<W> {
                     let primary_idx = primary_monitor_idx(&monitors, &self.outputs_config);
 
                     for target_idx in 0..monitors.len() {
-                        let target_workspaces = workspaces
+                        let target_workspaces: Vec<_> = workspaces
                             .extract_if(.., |ws| {
                                 ws.find_preferred_output(
                                     monitors.iter().map(|monitor| &monitor.output),
@@ -956,8 +1020,70 @@ impl<W: LayoutElement> Layout<W> {
                                     == target_idx
                             })
                             .collect();
-                        monitors[target_idx].append_workspaces(target_workspaces);
+
+                        if !target_workspaces.is_empty() {
+                            // Workspaces from a more important (lower-role) output go in front
+                            // of the target's own workspaces, so that as monitors disappear,
+                            // the workspaces on each monitor stay ordered by output role. The
+                            // rest go behind them, as they did before roles existed.
+                            let prepend = removed_role
+                                .zip(output_role(
+                                    &monitors[target_idx].output,
+                                    &self.outputs_config,
+                                ))
+                                .is_some_and(|(removed, target)| removed < target);
+
+                            let labels = target_workspaces
+                                .iter()
+                                .map(ws_label)
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            debug!(
+                                "moving workspace(s) [{labels}] to {} ({})",
+                                output_desc(&monitors[target_idx].output, &self.outputs_config),
+                                if prepend {
+                                    "before existing workspaces"
+                                } else {
+                                    "after existing workspaces"
+                                },
+                            );
+
+                            if prepend {
+                                monitors[target_idx].prepend_workspaces(target_workspaces);
+                            } else {
+                                monitors[target_idx].append_workspaces(target_workspaces);
+                            }
+                        } else {
+                            monitors[target_idx].append_workspaces(target_workspaces);
+                        }
                     }
+
+                    // With output roles configured, focus moves to the primary monitor when
+                    // the setup change makes it relevant: either the focused monitor was
+                    // removed, or the primary monitor itself was removed and a new output took
+                    // over as primary.
+                    if monitors
+                        .iter()
+                        .any(|mon| output_role(&mon.output, &self.outputs_config).is_some())
+                        && (was_active || idx == old_primary_idx)
+                    {
+                        if was_active && follow_active_ws {
+                            // Keep the user on the workspace they were working on: activate it
+                            // on the primary monitor, where it most likely ended up.
+                            let primary = &mut monitors[primary_idx];
+                            if let Some(ws_idx) = primary.idx_of_ws(removed_active_ws_id) {
+                                primary.activate_workspace(ws_idx);
+                            }
+                        }
+                        active_monitor_idx = primary_idx;
+                    }
+
+                    debug!(
+                        "removed output {}: primary monitor now {}, active monitor now {}",
+                        output_desc(output, &self.outputs_config),
+                        output_desc(&monitors[primary_idx].output, &self.outputs_config),
+                        output_desc(&monitors[active_monitor_idx].output, &self.outputs_config),
+                    );
 
                     MonitorSet::Normal {
                         monitors,
@@ -3062,7 +3188,17 @@ impl<W: LayoutElement> Layout<W> {
         else {
             return;
         };
+
+        let old_idx = *primary_idx;
         *primary_idx = primary_monitor_idx(monitors, &self.outputs_config);
+
+        if old_idx != *primary_idx {
+            debug!(
+                "primary monitor changed: {} -> {}",
+                output_desc(&monitors[old_idx].output, &self.outputs_config),
+                output_desc(&monitors[*primary_idx].output, &self.outputs_config),
+            );
+        }
     }
 
     fn update_options(&mut self, options: Options) {

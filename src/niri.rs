@@ -1171,6 +1171,8 @@ impl State {
         }
         drop(config);
 
+        debug!("focusing default monitor: {}", target.name());
+
         self.niri.layout.focus_output(&target);
         self.move_cursor_to_output(&target);
     }
@@ -3224,6 +3226,7 @@ impl Niri {
             None,
         );
 
+        let active_output = self.layout.active_output().cloned();
         self.layout.add_output(output.clone(), layout_config);
 
         let lock_render_state = if self.is_locked() {
@@ -3256,6 +3259,28 @@ impl Niri {
 
         // Must be last since it will call queue_redraw(output) which needs things to be filled-in.
         self.reposition_outputs(Some(&output));
+
+        // If the setup change moved the focused monitor, warp the cursor to it.
+        self.warp_cursor_if_focus_changed(active_output);
+    }
+
+    /// Warps the cursor to the focused monitor if the focus moved away from `old_active`.
+    fn warp_cursor_if_focus_changed(&mut self, old_active: Option<Output>) {
+        let new_active = self.layout.active_output().cloned();
+        if new_active == old_active {
+            return;
+        }
+
+        let Some(output) = new_active else {
+            return;
+        };
+
+        self.event_loop.insert_idle(move |state| {
+            // The focused monitor may have changed again in the meantime.
+            if state.niri.layout.active_output() == Some(&output) {
+                state.move_cursor_to_output(&output);
+            }
+        });
     }
 
     pub fn output_exists(&self, output: &Output) -> bool {
@@ -3273,6 +3298,8 @@ impl Niri {
     }
 
     pub fn remove_output(&mut self, output: &Output) {
+        let active_output = self.layout.active_output().cloned();
+
         for layer in layer_map_for_output(output).layers() {
             layer.layer_surface().send_close();
         }
@@ -3344,6 +3371,9 @@ impl Niri {
         if self.window_mru_ui.output() == Some(output) {
             self.cancel_mru();
         }
+
+        // If the setup change moved the focused monitor, warp the cursor to it.
+        self.warp_cursor_if_focus_changed(active_output);
     }
 
     pub fn output_resized(&mut self, output: &Output) {

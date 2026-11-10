@@ -2735,6 +2735,292 @@ fn orphaned_workspaces_prefer_primary_monitor() {
 }
 
 #[test]
+fn orphaned_workspaces_ordered_by_output_role() {
+    let mut config = Config::default();
+    config
+        .outputs
+        .0
+        .push(make_output_config("output1", Some(1)));
+    config
+        .outputs
+        .0
+        .push(make_output_config("output2", Some(2)));
+    config
+        .outputs
+        .0
+        .push(make_output_config("output3", Some(3)));
+
+    let mut layout = Layout::new(Clock::default(), &config);
+
+    check_ops_on_layout(
+        &mut layout,
+        [
+            Op::AddOutput(1),
+            Op::AddOutput(2),
+            Op::AddOutput(3),
+            Op::AddNamedWorkspace {
+                ws_name: 1,
+                output_names: vec![1],
+                layout_config: None,
+            },
+            Op::AddNamedWorkspace {
+                ws_name: 2,
+                output_names: vec![2],
+                layout_config: None,
+            },
+            Op::AddNamedWorkspace {
+                ws_name: 3,
+                output_names: vec![3],
+                layout_config: None,
+            },
+        ],
+    );
+
+    // Disconnect the two more important monitors.
+    check_ops_on_layout(&mut layout, [Op::RemoveOutput(1), Op::RemoveOutput(2)]);
+
+    // All workspaces end up on output3, ordered by output role: the more important monitors'
+    // workspaces come first, output3's own workspaces are pushed behind them.
+    let MonitorSet::Normal { monitors, .. } = &layout.monitor_set else {
+        unreachable!()
+    };
+    let names: Vec<String> = monitors[0]
+        .workspaces
+        .iter()
+        .map(|ws| ws.name().cloned().unwrap_or_default())
+        .collect();
+    assert_eq!(names, ["ws1", "ws2", "ws3", ""]);
+
+    layout.verify_invariants();
+}
+
+#[test]
+fn orphaned_workspaces_ordered_by_output_role_reversed_removal() {
+    // Same as orphaned_workspaces_ordered_by_output_role, but with the monitors disconnecting
+    // in the opposite order: the resulting order must be the same.
+    let mut config = Config::default();
+    config
+        .outputs
+        .0
+        .push(make_output_config("output1", Some(1)));
+    config
+        .outputs
+        .0
+        .push(make_output_config("output2", Some(2)));
+    config
+        .outputs
+        .0
+        .push(make_output_config("output3", Some(3)));
+
+    let mut layout = Layout::new(Clock::default(), &config);
+
+    check_ops_on_layout(
+        &mut layout,
+        [
+            Op::AddOutput(1),
+            Op::AddOutput(2),
+            Op::AddOutput(3),
+            Op::AddNamedWorkspace {
+                ws_name: 1,
+                output_names: vec![1],
+                layout_config: None,
+            },
+            Op::AddNamedWorkspace {
+                ws_name: 2,
+                output_names: vec![2],
+                layout_config: None,
+            },
+            Op::AddNamedWorkspace {
+                ws_name: 3,
+                output_names: vec![3],
+                layout_config: None,
+            },
+        ],
+    );
+
+    check_ops_on_layout(&mut layout, [Op::RemoveOutput(2), Op::RemoveOutput(1)]);
+
+    let MonitorSet::Normal { monitors, .. } = &layout.monitor_set else {
+        unreachable!()
+    };
+    let names: Vec<String> = monitors[0]
+        .workspaces
+        .iter()
+        .map(|ws| ws.name().cloned().unwrap_or_default())
+        .collect();
+    assert_eq!(names, ["ws1", "ws2", "ws3", ""]);
+
+    layout.verify_invariants();
+}
+
+#[test]
+fn focus_moves_to_primary_monitor_on_setup_change() {
+    let mut config = Config::default();
+    config
+        .outputs
+        .0
+        .push(make_output_config("output1", Some(1)));
+    config
+        .outputs
+        .0
+        .push(make_output_config("output2", Some(3)));
+
+    let mut layout = Layout::new(Clock::default(), &config);
+
+    // The laptop (output2) connects first, then the main monitor (output1).
+    check_ops_on_layout(
+        &mut layout,
+        [
+            Op::AddOutput(2),
+            Op::AddOutput(1),
+            Op::AddNamedWorkspace {
+                ws_name: 1,
+                output_names: vec![1],
+                layout_config: None,
+            },
+        ],
+    );
+
+    // Connecting the main monitor moved focus to it.
+    assert_eq!(layout.active_output().unwrap().name(), "output1");
+
+    // Focus the named workspace on the main monitor.
+    {
+        let mon = layout
+            .monitors_mut()
+            .find(|mon| mon.output_name().as_str() == "output1")
+            .unwrap();
+        let idx = mon
+            .workspaces
+            .iter()
+            .position(|ws| ws.name() == Some(&"ws1".to_string()))
+            .unwrap();
+        mon.activate_workspace(idx);
+    }
+
+    // Disconnecting the main monitor moves focus to the remaining primary monitor, keeping
+    // the user on the workspace they were working on.
+    check_ops_on_layout(&mut layout, [Op::RemoveOutput(1)]);
+    assert_eq!(layout.active_output().unwrap().name(), "output2");
+    assert_eq!(
+        layout.active_workspace().unwrap().name(),
+        Some(&"ws1".to_string())
+    );
+
+    // Reconnecting the main monitor moves focus back to it, restoring its last active
+    // workspace.
+    check_ops_on_layout(&mut layout, [Op::AddOutput(1)]);
+    assert_eq!(layout.active_output().unwrap().name(), "output1");
+    assert_eq!(
+        layout.active_workspace().unwrap().name(),
+        Some(&"ws1".to_string())
+    );
+
+    layout.verify_invariants();
+}
+
+#[test]
+fn focus_stays_when_neither_focused_nor_primary_monitor_removed() {
+    let mut config = Config::default();
+    config
+        .outputs
+        .0
+        .push(make_output_config("output1", Some(1)));
+    config
+        .outputs
+        .0
+        .push(make_output_config("output2", Some(2)));
+    config
+        .outputs
+        .0
+        .push(make_output_config("output3", Some(3)));
+
+    let mut layout = Layout::new(Clock::default(), &config);
+
+    check_ops_on_layout(
+        &mut layout,
+        [
+            Op::AddOutput(1),
+            Op::AddOutput(2),
+            Op::AddOutput(3),
+            Op::FocusOutput(3),
+        ],
+    );
+
+    // Removing the middle monitor must not move focus away from output3.
+    check_ops_on_layout(&mut layout, [Op::RemoveOutput(2)]);
+    assert_eq!(layout.active_output().unwrap().name(), "output3");
+
+    layout.verify_invariants();
+}
+
+#[test]
+fn focus_moves_to_new_primary_when_primary_monitor_removed() {
+    let mut config = Config::default();
+    config
+        .outputs
+        .0
+        .push(make_output_config("output1", Some(1)));
+    config
+        .outputs
+        .0
+        .push(make_output_config("output2", Some(2)));
+    config
+        .outputs
+        .0
+        .push(make_output_config("output3", Some(3)));
+
+    let mut layout = Layout::new(Clock::default(), &config);
+
+    check_ops_on_layout(
+        &mut layout,
+        [
+            Op::AddOutput(1),
+            Op::AddOutput(2),
+            Op::AddOutput(3),
+            Op::FocusOutput(3),
+        ],
+    );
+
+    // Removing the primary monitor moves focus to the monitor taking over as primary.
+    check_ops_on_layout(&mut layout, [Op::RemoveOutput(1)]);
+    assert_eq!(layout.active_output().unwrap().name(), "output2");
+
+    layout.verify_invariants();
+}
+
+#[test]
+fn focus_stays_when_new_output_does_not_become_primary() {
+    let mut config = Config::default();
+    config
+        .outputs
+        .0
+        .push(make_output_config("output1", Some(1)));
+    config
+        .outputs
+        .0
+        .push(make_output_config("output2", Some(2)));
+    config
+        .outputs
+        .0
+        .push(make_output_config("output3", Some(3)));
+
+    let mut layout = Layout::new(Clock::default(), &config);
+
+    // The laptop (output3) and the main monitor (output1) are connected.
+    check_ops_on_layout(
+        &mut layout,
+        [Op::AddOutput(1), Op::AddOutput(3), Op::FocusOutput(3)],
+    );
+
+    // Connecting a monitor that does not become primary must not steal focus.
+    check_ops_on_layout(&mut layout, [Op::AddOutput(2)]);
+    assert_eq!(layout.active_output().unwrap().name(), "output3");
+
+    layout.verify_invariants();
+}
+
+#[test]
 fn preset_height_change_removes_preset() {
     let mut config = Config::default();
     config.layout.preset_window_heights = vec![PresetSize::Fixed(1), PresetSize::Fixed(2)];
