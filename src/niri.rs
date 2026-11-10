@@ -1148,12 +1148,10 @@ impl State {
             .iter()
             .filter_map(|output| {
                 let name = output.user_data().get::<OutputName>().unwrap();
-                let (pos, c) = config.outputs.find_with_position(name)?;
-                let role = c.role?;
-                Some((role, pos, output))
+                config.outputs.role_rank(name).map(|rank| (rank, output))
             })
-            .min_by_key(|(role, pos, _)| (*role, *pos))
-            .map(|(_, _, output)| output.clone())
+            .min_by_key(|(rank, _)| *rank)
+            .map(|(_, output)| output.clone())
             .or_else(|| self.niri.sorted_outputs.first().cloned())
         else {
             // No outputs are connected.

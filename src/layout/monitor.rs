@@ -778,6 +778,19 @@ impl<W: LayoutElement> Monitor<W> {
             self.active_workspace_idx = self.workspaces.len() - 1;
         }
 
+        self.finish_adding_workspaces();
+    }
+
+    /// Finishes adding workspaces to this monitor, whether appended or prepended.
+    fn finish_adding_workspaces(&mut self) {
+        // If empty_workspace_above_first is set and the first workspace is now no longer empty,
+        // add a new empty workspace on top.
+        if self.options.layout.empty_workspace_above_first
+            && self.workspaces[0].has_windows_or_name()
+        {
+            self.add_workspace_top();
+        }
+
         // FIXME: if we're adding workspaces to currently invisible positions
         // (outside the workspace switch), we don't need to cancel it.
         self.workspace_switch = None;
@@ -800,18 +813,7 @@ impl<W: LayoutElement> Monitor<W> {
         self.workspaces.splice(0..0, workspaces);
         self.active_workspace_idx += count;
 
-        // If empty_workspace_above_first is set and the first workspace is now no longer empty,
-        // add a new empty workspace on top.
-        if self.options.layout.empty_workspace_above_first
-            && self.workspaces[0].has_windows_or_name()
-        {
-            self.add_workspace_top();
-        }
-
-        // FIXME: if we're adding workspaces to currently invisible positions
-        // (outside the workspace switch), we don't need to cancel it.
-        self.workspace_switch = None;
-        self.clean_up_workspaces();
+        self.finish_adding_workspaces();
     }
 
     pub fn move_down_or_to_workspace_down(&mut self) {

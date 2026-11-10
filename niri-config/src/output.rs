@@ -166,6 +166,13 @@ impl Outputs {
             .find(|(_, o)| name.matches(&o.name))
     }
 
+    /// Returns the role of the output matching `name`, together with its position in the config
+    /// (used as the tie-breaker between equal roles).
+    pub fn role_rank(&self, name: &OutputName) -> Option<(u32, usize)> {
+        let (pos, o) = self.find_with_position(name)?;
+        o.role.map(|role| (role, pos))
+    }
+
     pub fn find_mut(&mut self, name: &OutputName) -> Option<&mut Output> {
         self.0.iter_mut().find(|o| name.matches(&o.name))
     }
