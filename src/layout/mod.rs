@@ -819,6 +819,15 @@ impl<W: LayoutElement> Layout<W> {
                 ..
             } => {
                 let new_output_idx = monitors.len();
+
+                // The workspace the user is working on right now, if any. When docking into a
+                // different setup, it may follow the focus onto the new primary output below.
+                let followed_ws_id = {
+                    let mon = &monitors[active_monitor_idx];
+                    let ws = &mon.workspaces[mon.active_workspace_idx];
+                    ws.has_windows_or_name().then_some(ws.id())
+                };
+
                 let mut workspaces = vec![];
                 for source_idx in 0..monitors.len() {
                     let mut stopped_ws_switch = false;
@@ -915,6 +924,47 @@ impl<W: LayoutElement> Layout<W> {
                 // always the first monitor, which a newly added output never is.
                 if primary_idx == new_output_idx {
                     active_monitor_idx = primary_idx;
+
+                    // When docking into a different setup, the workspace the user was working
+                    // on has no output to be pulled back to: its original outputs are not
+                    // connected (e.g. they belong to the previous setup), so the preferred
+                    // output mechanism leaves it behind on e.g. the laptop. Move it along onto
+                    // the new primary instead, keeping its original outputs: when the user
+                    // returns to the previous setup, it is pulled back to its home monitor.
+                    //
+                    // A workspace whose original output is a later-connecting monitor of this
+                    // same dock will move here first and be pulled home a moment later; the
+                    // end state is correct.
+                    if let Some(ws_id) = followed_ws_id {
+                        let source_idx = monitors
+                            .iter()
+                            .position(|mon| mon.idx_of_ws(ws_id).is_some())
+                            .filter(|idx| *idx != primary_idx);
+
+                        if let Some(source_idx) = source_idx {
+                            let ws_idx = monitors[source_idx].idx_of_ws(ws_id).unwrap();
+                            let homeless = monitors[source_idx].workspaces[ws_idx]
+                                .find_preferred_output(
+                                    monitors.iter().map(|monitor| &monitor.output),
+                                )
+                                .is_none();
+
+                            if homeless {
+                                let ws = monitors[source_idx].remove_workspace_by_idx(ws_idx);
+                                debug!(
+                                    "moving focused workspace [{}] to new primary {} (no \
+                                     preferred output)",
+                                    ws_label(&ws),
+                                    output_desc(
+                                        &monitors[primary_idx].output,
+                                        &self.outputs_config
+                                    ),
+                                );
+                                let target = &mut monitors[primary_idx];
+                                target.insert_workspace(ws, target.active_workspace_idx + 1, true);
+                            }
+                        }
+                    }
                 }
 
                 debug!(

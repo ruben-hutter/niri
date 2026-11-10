@@ -1656,6 +1656,21 @@ fn workspace_output_name(layout: &Layout<TestWindow>, ws_name: usize) -> &str {
         .output_name()
 }
 
+/// Activates the named workspace on the given output's monitor.
+#[track_caller]
+fn activate_workspace_by_name(layout: &mut Layout<TestWindow>, output_name: &str, ws_name: &str) {
+    let mon = layout
+        .monitors_mut()
+        .find(|mon| mon.output_name().as_str() == output_name)
+        .unwrap();
+    let idx = mon
+        .workspaces
+        .iter()
+        .position(|ws| ws.name() == Some(&ws_name.to_string()))
+        .unwrap();
+    mon.activate_workspace(idx);
+}
+
 #[test]
 fn workspace_output_fallback_promotes_preferred_in_reverse_connection_order() {
     // output3 is not a candidate, so it stays the primary monitor throughout; every assertion
@@ -2885,18 +2900,7 @@ fn focus_moves_to_primary_monitor_on_setup_change() {
     assert_eq!(layout.active_output().unwrap().name(), "output1");
 
     // Focus the named workspace on the main monitor.
-    {
-        let mon = layout
-            .monitors_mut()
-            .find(|mon| mon.output_name().as_str() == "output1")
-            .unwrap();
-        let idx = mon
-            .workspaces
-            .iter()
-            .position(|ws| ws.name() == Some(&"ws1".to_string()))
-            .unwrap();
-        mon.activate_workspace(idx);
-    }
+    activate_workspace_by_name(&mut layout, "output1", "ws1");
 
     // Disconnecting the main monitor moves focus to the remaining primary monitor, keeping
     // the user on the workspace they were working on.
@@ -3016,6 +3020,121 @@ fn focus_stays_when_new_output_does_not_become_primary() {
     // Connecting a monitor that does not become primary must not steal focus.
     check_ops_on_layout(&mut layout, [Op::AddOutput(2)]);
     assert_eq!(layout.active_output().unwrap().name(), "output3");
+
+    layout.verify_invariants();
+}
+
+#[test]
+fn focused_workspace_follows_new_primary_across_setups() {
+    // The work setup has output1 (role 1) plus the laptop output2 (role 3); the home setup has
+    // output3 (role 1) plus the laptop. The user works on ws1 at work, undocks, and docks at
+    // home: ws1 has no preferred output at home, so it must follow the focus onto output3.
+    let mut config = Config::default();
+    config
+        .outputs
+        .0
+        .push(make_output_config("output1", Some(1)));
+    config
+        .outputs
+        .0
+        .push(make_output_config("output2", Some(3)));
+    config
+        .outputs
+        .0
+        .push(make_output_config("output3", Some(1)));
+
+    let mut layout = Layout::new(Clock::default(), &config);
+
+    check_ops_on_layout(
+        &mut layout,
+        [
+            Op::AddOutput(1),
+            Op::AddOutput(2),
+            Op::AddNamedWorkspace {
+                ws_name: 1,
+                output_names: vec![1],
+                layout_config: None,
+            },
+        ],
+    );
+
+    // Focus ws1 on the work main monitor.
+    activate_workspace_by_name(&mut layout, "output1", "ws1");
+
+    // Undock at work: ws1 follows the focus onto the laptop.
+    check_ops_on_layout(&mut layout, [Op::RemoveOutput(1)]);
+    assert_eq!(layout.active_output().unwrap().name(), "output2");
+    assert_eq!(
+        layout.active_workspace().unwrap().name(),
+        Some(&"ws1".to_string())
+    );
+
+    // Dock at home: the new role-1 output becomes the primary and takes focus; ws1 has no
+    // output to be pulled back to, so it must move along instead of staying on the laptop.
+    check_ops_on_layout(&mut layout, [Op::AddOutput(3)]);
+    assert_eq!(layout.active_output().unwrap().name(), "output3");
+    assert_eq!(
+        layout.active_workspace().unwrap().name(),
+        Some(&"ws1".to_string())
+    );
+    assert_eq!(workspace_output_name(&layout, 1), "output3");
+
+    // The laptop's workspace must not have been duplicated.
+    assert_eq!(
+        layout
+            .workspaces()
+            .filter(|(_, _, ws)| ws.name() == Some(&"ws1".to_string()))
+            .count(),
+        1
+    );
+
+    // Return to the work setup: ws1 kept its original outputs, so it is pulled back to its
+    // home monitor and focused there.
+    check_ops_on_layout(&mut layout, [Op::RemoveOutput(3), Op::AddOutput(1)]);
+    assert_eq!(layout.active_output().unwrap().name(), "output1");
+    assert_eq!(workspace_output_name(&layout, 1), "output1");
+    assert_eq!(
+        layout.active_workspace().unwrap().name(),
+        Some(&"ws1".to_string())
+    );
+
+    layout.verify_invariants();
+}
+
+#[test]
+fn laptop_workspace_stays_when_docking_new_primary() {
+    let mut config = Config::default();
+    config
+        .outputs
+        .0
+        .push(make_output_config("output1", Some(1)));
+    config
+        .outputs
+        .0
+        .push(make_output_config("output2", Some(3)));
+
+    let mut layout = Layout::new(Clock::default(), &config);
+
+    check_ops_on_layout(
+        &mut layout,
+        [
+            Op::AddOutput(2),
+            Op::AddNamedWorkspace {
+                ws_name: 2,
+                output_names: vec![2],
+                layout_config: None,
+            },
+        ],
+    );
+
+    // Work on a laptop workspace.
+    activate_workspace_by_name(&mut layout, "output2", "ws2");
+
+    // Dock: output1 becomes the primary and takes focus, but ws2 belongs to the laptop
+    // (its preferred output is connected), so it must stay there.
+    check_ops_on_layout(&mut layout, [Op::AddOutput(1)]);
+    assert_eq!(layout.active_output().unwrap().name(), "output1");
+    assert_eq!(workspace_output_name(&layout, 2), "output2");
 
     layout.verify_invariants();
 }
