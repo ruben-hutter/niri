@@ -259,6 +259,7 @@ The connected output with the lowest role becomes the **primary monitor**:
 
 - It is focused at startup, unless some connected output has [`focus-at-startup`](#focus-at-startup) set.
 - When an output is disconnected, its workspaces that have no other preferred output are moved to it.
+- When the primary output connects, workspaces from setups that are not currently connected (for example, after commuting between two docks with the laptop in between) move onto it, keeping their order; the workspace you were focused on stays focused. They move back to their home outputs when those reconnect.
 
 If several connected outputs share the lowest role, they are prioritized in the order that they appear in the config.
 

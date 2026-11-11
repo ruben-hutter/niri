@@ -925,44 +925,63 @@ impl<W: LayoutElement> Layout<W> {
                 if primary_idx == new_output_idx {
                     active_monitor_idx = primary_idx;
 
-                    // When docking into a different setup, the workspace the user was working
-                    // on has no output to be pulled back to: its original outputs are not
-                    // connected (e.g. they belong to the previous setup), so the preferred
-                    // output mechanism leaves it behind on e.g. the laptop. Move it along onto
-                    // the new primary instead, keeping its original outputs: when the user
-                    // returns to the previous setup, it is pulled back to its home monitor.
-                    //
-                    // A workspace whose original output is a later-connecting monitor of this
-                    // same dock will move here first and be pulled home a moment later; the
-                    // end state is correct.
+                    // A workspace without a connected preferred output (a "camper" from
+                    // another setup) belongs on the primary monitor, see the
+                    // verify_invariants contract. Docking into a different setup makes all
+                    // campers homeless at once, so gather them from the other monitors,
+                    // keeping their relative order and their original outputs: they are
+                    // pulled back to their home monitors when the original setup reconnects.
+                    // A camper whose home monitor is a later-connecting output of this same
+                    // dock bounces here first and is pulled home a moment later; the end
+                    // state is correct.
+                    let outputs: Vec<_> = monitors.iter().map(|mon| mon.output.clone()).collect();
+                    let mut campers = Vec::new();
+                    for mon_idx in (0..monitors.len()).filter(|idx| *idx != primary_idx) {
+                        // The active workspace can be extracted itself, so remember it by id.
+                        let (active_ws_id, extracted) = {
+                            let source = &mut monitors[mon_idx];
+                            let active_ws_id = source
+                                .workspaces
+                                .get(source.active_workspace_idx)
+                                .map(|ws| ws.id());
+                            let extracted: Vec<_> = source
+                                .workspaces
+                                .extract_if(.., |ws| {
+                                    ws.has_windows_or_name()
+                                        && ws.find_preferred_output(outputs.iter()).is_none()
+                                })
+                                .collect();
+                            (active_ws_id, extracted)
+                        };
+                        if extracted.is_empty() {
+                            continue;
+                        }
+
+                        debug!(
+                            "moving workspace(s) [{}] to new primary {} (no preferred output)",
+                            ws_labels(&extracted),
+                            output_desc(&monitors[primary_idx].output, &self.outputs_config),
+                        );
+                        campers.extend(extracted);
+
+                        // The extraction can leave the active index stale (the preferred-output
+                        // pull above adjusts its own removals); re-point it at the previously
+                        // active workspace, falling back to the last one if that workspace
+                        // itself was extracted.
+                        let source = &mut monitors[mon_idx];
+                        source.workspace_switch = None;
+                        source.clean_up_workspaces();
+                        source.active_workspace_idx = active_ws_id
+                            .and_then(|id| source.idx_of_ws(id))
+                            .unwrap_or(source.workspaces.len().saturating_sub(1));
+                    }
+                    monitors[primary_idx].append_workspaces(campers);
+
+                    // Keep the user on the workspace they were working on.
                     if let Some(ws_id) = followed_ws_id {
-                        let source_idx = monitors
-                            .iter()
-                            .position(|mon| mon.idx_of_ws(ws_id).is_some())
-                            .filter(|idx| *idx != primary_idx);
-
-                        if let Some(source_idx) = source_idx {
-                            let ws_idx = monitors[source_idx].idx_of_ws(ws_id).unwrap();
-                            let homeless = monitors[source_idx].workspaces[ws_idx]
-                                .find_preferred_output(
-                                    monitors.iter().map(|monitor| &monitor.output),
-                                )
-                                .is_none();
-
-                            if homeless {
-                                let ws = monitors[source_idx].remove_workspace_by_idx(ws_idx);
-                                debug!(
-                                    "moving focused workspace [{}] to new primary {} (no \
-                                     preferred output)",
-                                    ws_label(&ws),
-                                    output_desc(
-                                        &monitors[primary_idx].output,
-                                        &self.outputs_config
-                                    ),
-                                );
-                                let target = &mut monitors[primary_idx];
-                                target.insert_workspace(ws, target.active_workspace_idx + 1, true);
-                            }
+                        let mon = &mut monitors[primary_idx];
+                        if let Some(ws_idx) = mon.idx_of_ws(ws_id) {
+                            mon.activate_workspace(ws_idx);
                         }
                     }
                 }

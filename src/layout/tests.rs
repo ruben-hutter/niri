@@ -3058,8 +3058,12 @@ fn focused_workspace_follows_new_primary_across_setups() {
         ],
     );
 
-    // Focus ws1 on the work main monitor.
+    // Focus ws1 on the work main monitor and give it a window, like real usage.
     activate_workspace_by_name(&mut layout, "output1", "ws1");
+    Op::AddWindow {
+        params: TestWindowParams::new(1),
+    }
+    .apply(&mut layout);
 
     // Undock at work: ws1 follows the focus onto the laptop.
     check_ops_on_layout(&mut layout, [Op::RemoveOutput(1)]);
@@ -3135,6 +3139,203 @@ fn laptop_workspace_stays_when_docking_new_primary() {
     check_ops_on_layout(&mut layout, [Op::AddOutput(1)]);
     assert_eq!(layout.active_output().unwrap().name(), "output1");
     assert_eq!(workspace_output_name(&layout, 2), "output2");
+
+    layout.verify_invariants();
+}
+
+#[test]
+fn focused_workspace_follows_new_primary_with_empty_workspace_above_first() {
+    // Same as focused_workspace_follows_new_primary_across_setups, but with
+    // empty_workspace_above_first enabled (as in the reporter's config) and real windows
+    // instead of a named workspace.
+    let mut config = Config::default();
+    config.layout.empty_workspace_above_first = true;
+    config
+        .outputs
+        .0
+        .push(make_output_config("output1", Some(1)));
+    config
+        .outputs
+        .0
+        .push(make_output_config("output2", Some(3)));
+    config
+        .outputs
+        .0
+        .push(make_output_config("output3", Some(1)));
+
+    let mut layout = Layout::new(Clock::default(), &config);
+
+    // Boot at the work dock: work main monitor + laptop.
+    check_ops_on_layout(&mut layout, [Op::AddOutput(1), Op::AddOutput(2)]);
+    Op::AddWindow {
+        params: TestWindowParams::new(1),
+    }
+    .apply(&mut layout);
+
+    // The window landed on output1's currently focused workspace; nothing to focus.
+
+    // Undock at work: the focused workspace follows onto the laptop.
+    check_ops_on_layout(&mut layout, [Op::RemoveOutput(1)]);
+    assert_eq!(layout.active_output().unwrap().name(), "output2");
+    assert!(layout.active_workspace().unwrap().has_windows());
+
+    // Dock at home: the new role-1 output becomes primary and the focused workspace must
+    // follow it.
+    check_ops_on_layout(&mut layout, [Op::AddOutput(3)]);
+    assert_eq!(layout.active_output().unwrap().name(), "output3");
+
+    let active_ws = layout.active_workspace().unwrap();
+    assert!(active_ws.has_windows(), "the window must have followed");
+    assert_eq!(active_ws.current_output().unwrap().name(), "output3");
+
+    layout.verify_invariants();
+}
+
+#[test]
+fn focused_workspace_follows_through_full_commute() {
+    // The full commute the reporter described: boot at the work dock (work main role 1, work
+    // side role 2, laptop role 3), work in a few workspaces with windows, undock (workspaces
+    // camp on the laptop), then dock at home where the home side monitor (role 2) connects
+    // FIRST and becomes primary for a moment, followed by the home main monitor (role 1).
+    // The focused workspace must end up on the home main monitor.
+    let mut config = Config::default();
+    config.layout.empty_workspace_above_first = true;
+    config
+        .outputs
+        .0
+        .push(make_output_config("output1", Some(1)));
+    config
+        .outputs
+        .0
+        .push(make_output_config("output2", Some(2)));
+    config
+        .outputs
+        .0
+        .push(make_output_config("output3", Some(3)));
+    config
+        .outputs
+        .0
+        .push(make_output_config("output4", Some(1)));
+    config
+        .outputs
+        .0
+        .push(make_output_config("output5", Some(2)));
+
+    let mut layout = Layout::new(Clock::default(), &config);
+
+    // Boot at work: main, side, laptop.
+    check_ops_on_layout(
+        &mut layout,
+        [Op::AddOutput(1), Op::AddOutput(2), Op::AddOutput(3)],
+    );
+
+    // Work: a window on output1, then two workspaces with windows on output2.
+    Op::AddWindow {
+        params: TestWindowParams::new(1),
+    }
+    .apply(&mut layout);
+    check_ops_on_layout(
+        &mut layout,
+        [
+            Op::FocusOutput(2),
+            Op::FocusWorkspaceDown,
+            Op::AddWindow {
+                params: TestWindowParams::new(3),
+            },
+        ],
+    );
+    Op::AddWindow {
+        params: TestWindowParams::new(2),
+    }
+    .apply(&mut layout);
+
+    // End the work session focused on output1's workspace.
+    check_ops_on_layout(&mut layout, [Op::FocusOutput(1)]);
+
+    // Undock: the campers land on the laptop.
+    check_ops_on_layout(&mut layout, [Op::RemoveOutput(1), Op::RemoveOutput(2)]);
+    assert_eq!(layout.active_output().unwrap().name(), "output3");
+
+    // Dock at home: home side (role 2) connects first, becoming primary for a moment, then
+    // home main (role 1).
+    check_ops_on_layout(&mut layout, [Op::AddOutput(5)]);
+    check_ops_on_layout(&mut layout, [Op::AddOutput(4)]);
+
+    // The focused workspace must have ended up on the home main monitor, together with the
+    // other camper workspaces in their original relative order.
+    assert_eq!(layout.active_output().unwrap().name(), "output4");
+    let active_ws = layout.active_workspace().unwrap();
+    assert!(active_ws.has_windows(), "the window must have followed");
+    assert_eq!(active_ws.current_output().unwrap().name(), "output4");
+
+    let with_windows: Vec<&str> = layout
+        .workspaces()
+        .filter(|(_, _, ws)| ws.has_windows())
+        .map(|(mon, _, _)| mon.unwrap().output_name().as_str())
+        .collect();
+    assert_eq!(with_windows, ["output4", "output4"]);
+
+    // Both windows from output2 must be present on output4, and no camper may remain on the
+    // laptop.
+    let window_count: usize = layout
+        .workspaces()
+        .filter(|(mon, _, ws)| {
+            mon.is_some_and(|mon| mon.output_name() == "output4") && ws.has_windows()
+        })
+        .map(|(_, _, ws)| ws.windows().count())
+        .sum();
+    assert_eq!(window_count, 3);
+
+    layout.verify_invariants();
+}
+
+#[test]
+fn docking_while_focused_on_empty_workspace_does_not_panic() {
+    // Regression: extracting campers used to leave the source monitor's active_workspace_idx
+    // stale when the focused workspace itself was empty, panicking later.
+    let mut config = Config::default();
+    config.layout.empty_workspace_above_first = true;
+    config
+        .outputs
+        .0
+        .push(make_output_config("output1", Some(1)));
+    config
+        .outputs
+        .0
+        .push(make_output_config("output2", Some(2)));
+    config
+        .outputs
+        .0
+        .push(make_output_config("output3", Some(3)));
+    config
+        .outputs
+        .0
+        .push(make_output_config("output4", Some(1)));
+    config
+        .outputs
+        .0
+        .push(make_output_config("output5", Some(2)));
+
+    let mut layout = Layout::new(Clock::default(), &config);
+
+    // Boot at work and put a window on output1.
+    check_ops_on_layout(
+        &mut layout,
+        [Op::AddOutput(1), Op::AddOutput(2), Op::AddOutput(3)],
+    );
+    Op::AddWindow {
+        params: TestWindowParams::new(1),
+    }
+    .apply(&mut layout);
+
+    // Undock and focus an empty workspace on the laptop.
+    check_ops_on_layout(&mut layout, [Op::RemoveOutput(1), Op::RemoveOutput(2)]);
+    check_ops_on_layout(&mut layout, [Op::FocusOutput(3), Op::FocusWorkspaceDown]);
+
+    // Dock at home; must not panic and focus must land on the home main monitor.
+    check_ops_on_layout(&mut layout, [Op::AddOutput(5)]);
+    check_ops_on_layout(&mut layout, [Op::AddOutput(4)]);
+    assert_eq!(layout.active_output().unwrap().name(), "output4");
 
     layout.verify_invariants();
 }
