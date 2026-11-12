@@ -3439,6 +3439,52 @@ fn role_anchored_workspaces_camp_on_nearest_role_and_return() {
 }
 
 #[test]
+fn role_anchored_workspaces_camp_on_largest_role_below_anchor() {
+    // With only roles below the anchor connected, the workspace camps on the largest of
+    // them: a role-3 workspace with only roles 1 and 2 connected goes to role 2.
+    let mut config = Config::default();
+    config
+        .outputs
+        .0
+        .push(make_output_config("output1", Some(1)));
+    config
+        .outputs
+        .0
+        .push(make_output_config("output2", Some(2)));
+    config
+        .outputs
+        .0
+        .push(make_output_config("output3", Some(3)));
+
+    let mut layout = Layout::new(Clock::default(), &config);
+
+    check_ops_on_layout(
+        &mut layout,
+        [
+            Op::AddOutput(1),
+            Op::AddOutput(2),
+            Op::AddOutput(3),
+            Op::FocusOutput(3),
+            Op::AddWindow {
+                params: TestWindowParams::new(1),
+            },
+        ],
+    );
+
+    // Disconnect the laptop (role 3): the workspace camps on role 2, the largest connected
+    // role below its anchor.
+    check_ops_on_layout(&mut layout, [Op::RemoveOutput(3)]);
+    let with_windows: Vec<&str> = layout
+        .workspaces()
+        .filter(|(_, _, ws)| ws.has_windows())
+        .map(|(mon, _, _)| mon.unwrap().output_name().as_str())
+        .collect();
+    assert_eq!(with_windows, ["output2"]);
+
+    layout.verify_invariants();
+}
+
+#[test]
 fn role_anchor_stays_sticky_during_commute_use() {
     // A role-1 workspace used on the laptop during the commute (which claims the laptop as
     // its original output) must return to role 1 when docking: the role anchor wins over the

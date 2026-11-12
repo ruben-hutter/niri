@@ -410,14 +410,10 @@ fn output_role(output: &Output, config: &Outputs) -> Option<(u32, usize)> {
 /// The primary monitor is the monitor with the lowest output role, with ties broken by the order
 /// of the outputs in the config. If no monitor has a role configured, the first monitor wins.
 fn primary_monitor_idx(monitors: &[Monitor<impl LayoutElement>], config: &Outputs) -> usize {
-    monitors
+    ranked_monitors(monitors, config)
         .iter()
-        .enumerate()
-        .filter_map(|(idx, mon)| {
-            output_role(&mon.output, config).map(|(role, pos)| (role, pos, idx))
-        })
-        .min()
-        .map_or(0, |(_, _, idx)| idx)
+        .min_by_key(|&&(role, pos, _)| (role, pos))
+        .map_or(0, |&(_, _, idx)| idx)
 }
 
 /// Returns the connected monitors that have a role configured, as
