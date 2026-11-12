@@ -16,6 +16,7 @@ use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Point, Rectangle, Serial, Size, Transform};
 use smithay::wayland::compositor::with_states;
 use smithay::wayland::shell::xdg::SurfaceCachedState;
+use tracing::debug;
 
 use super::floating::{FloatingSpace, FloatingSpaceRenderElement};
 use super::scrolling::{
@@ -272,7 +273,7 @@ impl<W: LayoutElement> Workspace<W> {
         let shadow_config =
             compute_workspace_shadow_config(options.overview.workspace_shadow, view_size);
 
-        Self {
+        let workspace = Self {
             scrolling,
             floating,
             floating_is_active: FloatingActive::No,
@@ -291,7 +292,16 @@ impl<W: LayoutElement> Workspace<W> {
             name: config.map(|c| c.name.0),
             layout_config,
             id: WorkspaceId::next(),
+        };
+
+        if let Some(role) = workspace.role_anchor {
+            debug!(
+                "workspace {} anchored to role {role}",
+                super::ws_label(&workspace)
+            );
         }
+
+        workspace
     }
 
     pub fn new_with_config_no_outputs(
@@ -367,6 +377,10 @@ impl<W: LayoutElement> Workspace<W> {
 
     pub fn name(&self) -> Option<&String> {
         self.name.as_ref()
+    }
+
+    pub fn role_anchor(&self) -> Option<u32> {
+        self.role_anchor
     }
 
     pub fn unname(&mut self) {

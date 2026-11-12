@@ -433,22 +433,27 @@ fn ranked_monitors(
         .collect()
 }
 
-/// Returns the monitor with the given role, preferring the earliest config entry among
-/// connected monitors sharing the role, like `primary_monitor_idx()` does.
-fn monitor_with_role(ranked: &[(u32, usize, usize)], role: u32) -> Option<usize> {
+/// Returns the ranked entry of the monitor with the given role, preferring the earliest
+/// config entry among connected monitors sharing the role, like `primary_monitor_idx()`
+/// does.
+fn monitor_with_role(ranked: &[(u32, usize, usize)], role: u32) -> Option<(u32, usize, usize)> {
     ranked
         .iter()
         .filter(|&&(r, _, _)| r == role)
-        .min_by_key(|&(_, pos, _)| pos)
-        .map(|&(_, _, idx)| idx)
+        .min_by_key(|&&(_, pos, _)| pos)
+        .copied()
 }
 
-/// Returns the monitor with the nearest available role to the anchor: the smallest connected
-/// role at or above the anchor, else the largest connected role below it.
+/// Returns the ranked entry of the monitor with the nearest available role to the anchor:
+/// the smallest connected role at or above the anchor, else the largest connected role
+/// below it.
 ///
 /// Used for placing role-anchored workspaces while their role is not connected, so that they
 /// camp as close to their role as possible (also handling role gaps).
-fn nearest_role_monitor(ranked: &[(u32, usize, usize)], anchor: u32) -> Option<usize> {
+fn nearest_role_monitor(
+    ranked: &[(u32, usize, usize)],
+    anchor: u32,
+) -> Option<(u32, usize, usize)> {
     ranked
         .iter()
         .filter(|&&(r, _, _)| r >= anchor)
@@ -459,11 +464,33 @@ fn nearest_role_monitor(ranked: &[(u32, usize, usize)], anchor: u32) -> Option<u
                 .filter(|&&(r, _, _)| r < anchor)
                 .min_by_key(|&(r, pos, _)| (std::cmp::Reverse(r), pos))
         })
-        .map(|&(_, _, idx)| idx)
+        .copied()
+}
+
+/// The anchor-driven reason a workspace was placed on a monitor, for logging.
+enum AnchorReason {
+    /// The monitor has the workspace's role anchor.
+    Exact { anchor: u32 },
+    /// The monitor has the role nearest to the workspace's role anchor.
+    Nearest { nearest: u32, anchor: u32 },
+}
+
+impl AnchorReason {
+    /// Returns a short description of this reason for logging.
+    fn desc(self) -> String {
+        match self {
+            Self::Exact { anchor } => format!("role anchor {anchor}"),
+            Self::Nearest { nearest, anchor } => {
+                format!("nearest role {nearest}, anchor {anchor}")
+            }
+        }
+    }
 }
 
 /// Returns the monitor a role-anchored workspace prefers to be on when an output connects:
 /// the monitor of its role anchor if that role is connected, else its original outputs.
+/// Together with it, returns the anchor-driven reason if the role anchor (rather than the
+/// original outputs) picked the monitor.
 ///
 /// Among connected monitors sharing the anchor role, the workspace stays on its current
 /// monitor if it already has the role, and otherwise prefers the earliest config entry.
@@ -474,36 +501,43 @@ fn ws_preferred_monitor_idx<'a>(
     current_idx: usize,
     ranked: &[(u32, usize, usize)],
     outputs: impl Iterator<Item = &'a Output> + Clone,
-) -> Option<usize> {
+) -> Option<(usize, Option<AnchorReason>)> {
     if let Some(anchor) = ws.role_anchor {
         if ranked
             .iter()
             .any(|&(role, _, idx)| role == anchor && idx == current_idx)
         {
-            return Some(current_idx);
+            return Some((current_idx, Some(AnchorReason::Exact { anchor })));
         }
-        if let Some(idx) = monitor_with_role(ranked, anchor) {
-            return Some(idx);
+        if let Some((_, _, idx)) = monitor_with_role(ranked, anchor) {
+            return Some((idx, Some(AnchorReason::Exact { anchor })));
         }
     }
-    ws.find_preferred_output(outputs)
+    ws.find_preferred_output(outputs).map(|idx| (idx, None))
 }
 
 /// Returns the monitor a workspace folds onto when its current monitor is removed: for a
 /// role-anchored workspace, the monitor of its role anchor (exact role, else the nearest
 /// available role) while any ranked monitor is connected; otherwise its original outputs.
+/// Together with it, returns the anchor-driven reason if the role anchor (rather than the
+/// original outputs) picked the monitor.
 fn ws_fold_monitor_idx<'a>(
     ws: &Workspace<impl LayoutElement>,
     ranked: &[(u32, usize, usize)],
     outputs: impl Iterator<Item = &'a Output> + Clone,
-) -> Option<usize> {
+) -> Option<(usize, Option<AnchorReason>)> {
     if let Some(anchor) = ws.role_anchor {
         if !ranked.is_empty() {
             return monitor_with_role(ranked, anchor)
-                .or_else(|| nearest_role_monitor(ranked, anchor));
+                .map(|(_, _, idx)| (idx, Some(AnchorReason::Exact { anchor })))
+                .or_else(|| {
+                    nearest_role_monitor(ranked, anchor).map(|(nearest, _, idx)| {
+                        (idx, Some(AnchorReason::Nearest { nearest, anchor }))
+                    })
+                });
         }
     }
-    ws.find_preferred_output(outputs)
+    ws.find_preferred_output(outputs).map(|idx| (idx, None))
 }
 
 /// Returns a short description of an output for logging, including its configured role.
@@ -529,6 +563,39 @@ fn ws_labels(workspaces: &[Workspace<impl LayoutElement>]) -> String {
         .map(ws_label)
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// Returns a short description of a role anchor for logging.
+fn anchor_desc(anchor: Option<u32>) -> String {
+    match anchor {
+        Some(role) => format!("role {role}"),
+        None => "none".to_string(),
+    }
+}
+
+/// Pushes an item onto a list of distinct strings, in first-appearance order.
+fn push_distinct(list: &mut Vec<String>, item: String) {
+    if !list.contains(&item) {
+        list.push(item);
+    }
+}
+
+/// Logs a role anchor change of a workspace, e.g. following an explicit move.
+fn log_reanchor(ws: &Workspace<impl LayoutElement>, old: Option<u32>, new: Option<u32>) {
+    if old == new {
+        return;
+    }
+
+    let new = if new.is_some() {
+        anchor_desc(new)
+    } else {
+        format!("{} (unranked output)", anchor_desc(None))
+    };
+    debug!(
+        "workspace {} re-anchored {} -> {new}",
+        ws_label(ws),
+        anchor_desc(old)
+    );
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -924,11 +991,14 @@ impl<W: LayoutElement> Layout<W> {
                 };
 
                 let mut workspaces = vec![];
+                // Distinct reasons why workspaces were pulled onto the new output, in
+                // first-appearance order, for logging.
+                let mut pull_reasons: Vec<String> = vec![];
                 for source_idx in 0..monitors.len() {
                     let mut stopped_ws_switch = false;
 
                     for i in (0..monitors[source_idx].workspaces.len()).rev() {
-                        let preferred = ws_preferred_monitor_idx(
+                        let Some((preferred_idx, anchor_reason)) = ws_preferred_monitor_idx(
                             &monitors[source_idx].workspaces[i],
                             source_idx,
                             &ranked,
@@ -936,8 +1006,10 @@ impl<W: LayoutElement> Layout<W> {
                                 .iter()
                                 .map(|monitor| &monitor.output)
                                 .chain(std::iter::once(&output)),
-                        ) == Some(new_output_idx);
-                        if !preferred {
+                        ) else {
+                            continue;
+                        };
+                        if preferred_idx != new_output_idx {
                             continue;
                         }
 
@@ -956,6 +1028,11 @@ impl<W: LayoutElement> Layout<W> {
                         // another monitor. However, we will add an empty workspace in the end
                         // instead.
                         if ws.has_windows_or_name() {
+                            let reason = anchor_reason.map_or_else(
+                                || "preferred output".to_owned(),
+                                |reason| reason.desc(),
+                            );
+                            push_distinct(&mut pull_reasons, reason);
                             workspaces.push(ws);
                         }
 
@@ -995,9 +1072,10 @@ impl<W: LayoutElement> Layout<W> {
 
                 if !workspaces.is_empty() {
                     debug!(
-                        "moving workspace(s) [{}] to new output {} (preferred output)",
+                        "moving workspace(s) [{}] to new output {} ({})",
                         ws_labels(&workspaces),
-                        output_desc(&output, &self.outputs_config)
+                        output_desc(&output, &self.outputs_config),
+                        pull_reasons.join("; ")
                     );
                 }
 
@@ -1037,6 +1115,8 @@ impl<W: LayoutElement> Layout<W> {
                     // Role-anchored workspaces are never campers while any ranked monitor is
                     // connected: they camp at their role position (pulled to the monitor of
                     // their role when it connects) instead of gathering onto the primary.
+                    // Since this gather only runs when the new output became the primary, it
+                    // always has a role, so no anchored workspace is ever gathered here.
                     let outputs: Vec<_> = monitors.iter().map(|mon| mon.output.clone()).collect();
                     let mut campers = Vec::new();
                     for mon_idx in (0..monitors.len()).filter(|idx| *idx != primary_idx) {
@@ -1192,15 +1272,23 @@ impl<W: LayoutElement> Layout<W> {
                     let ranked = ranked_monitors(&monitors, &self.outputs_config);
 
                     for target_idx in 0..monitors.len() {
+                        // Anchor-driven fold reasons, aligned with the extracted workspaces,
+                        // for logging.
+                        let mut reasons: Vec<Option<AnchorReason>> = vec![];
                         let target_workspaces: Vec<_> = workspaces
                             .extract_if(.., |ws| {
-                                ws_fold_monitor_idx(
+                                let (idx, reason) = ws_fold_monitor_idx(
                                     ws,
                                     &ranked,
                                     monitors.iter().map(|monitor| &monitor.output),
                                 )
-                                .unwrap_or(primary_idx)
-                                    == target_idx
+                                .unwrap_or((primary_idx, None));
+                                if idx == target_idx {
+                                    reasons.push(reason);
+                                    true
+                                } else {
+                                    false
+                                }
                             })
                             .collect();
 
@@ -1216,15 +1304,26 @@ impl<W: LayoutElement> Layout<W> {
                                 ))
                                 .is_some_and(|(removed, target)| removed < target);
 
+                            // Distinct anchor-driven fold reasons, in first-appearance order.
+                            let mut anchor_reasons: Vec<String> = vec![];
+                            for reason in reasons.into_iter().flatten() {
+                                push_distinct(&mut anchor_reasons, reason.desc());
+                            }
+                            let placement = if prepend {
+                                "before existing workspaces"
+                            } else {
+                                "after existing workspaces"
+                            };
+                            let reason = if anchor_reasons.is_empty() {
+                                placement.to_owned()
+                            } else {
+                                format!("{placement}; {}", anchor_reasons.join(", "))
+                            };
+
                             debug!(
-                                "moving workspace(s) [{}] to {} ({})",
+                                "moving workspace(s) [{}] to {} ({reason})",
                                 ws_labels(&target_workspaces),
                                 output_desc(&monitors[target_idx].output, &self.outputs_config),
-                                if prepend {
-                                    "before existing workspaces"
-                                } else {
-                                    "after existing workspaces"
-                                },
                             );
 
                             if prepend {
@@ -2931,7 +3030,7 @@ impl<W: LayoutElement> Layout<W> {
                     {
                         continue;
                     }
-                    if let Some(anchor_idx) = monitor_with_role(&ranked, anchor) {
+                    if let Some((_, _, anchor_idx)) = monitor_with_role(&ranked, anchor) {
                         assert_eq!(
                             idx, anchor_idx,
                             "role-anchored workspace must be on its role's monitor \
@@ -3928,7 +4027,10 @@ impl<W: LayoutElement> Layout<W> {
             current.workspaces[old_idx].original_outputs = vec![OutputId::new(&current.output)];
             // Same for the role anchor: an explicit move to the output the workspace is
             // already on re-anchors it to that output's role.
-            current.workspaces[old_idx].role_anchor = current.output_role;
+            let output_role = current.output_role;
+            let ws = &mut current.workspaces[old_idx];
+            log_reanchor(ws, ws.role_anchor, output_role);
+            ws.role_anchor = output_role;
 
             return false;
         }
@@ -3942,6 +4044,7 @@ impl<W: LayoutElement> Layout<W> {
         ws.original_outputs = vec![OutputId::new(new_output)];
         // An explicit move re-anchors the workspace to the target output's role; moving to an
         // unranked output clears the anchor.
+        log_reanchor(&ws, ws.role_anchor, new_output_role);
         ws.role_anchor = new_output_role;
 
         let target = &mut monitors[target_idx];
