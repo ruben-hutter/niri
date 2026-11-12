@@ -3918,6 +3918,8 @@ impl<W: LayoutElement> Layout<W> {
             .position(|mon| mon.output == *new_output)
             .unwrap();
 
+        let new_output_role = monitors[target_idx].output_role;
+
         let current = &mut monitors[current_idx];
 
         if current.workspaces.len() <= old_idx {
@@ -3939,6 +3941,9 @@ impl<W: LayoutElement> Layout<W> {
 
         let mut ws = current.remove_workspace_by_idx(old_idx);
         ws.original_outputs = vec![OutputId::new(new_output)];
+        // An explicit move re-anchors the workspace to the target output's role; moving to an
+        // unranked output clears the anchor.
+        ws.role_anchor = new_output_role;
 
         let target = &mut monitors[target_idx];
         target.insert_workspace(ws, target.active_workspace_idx + 1, activate);
