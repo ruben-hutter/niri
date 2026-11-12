@@ -325,22 +325,12 @@ impl<W: LayoutElement> Monitor<W> {
         }
 
         if options.layout.empty_workspace_above_first && !workspaces.is_empty() {
-            let ws = Workspace::new(
-                output.clone(),
-                output_role,
-                clock.clone(),
-                options.clone(),
-            );
+            let ws = Workspace::new(output.clone(), output_role, clock.clone(), options.clone());
             workspaces.insert(0, ws);
             active_workspace_idx += 1;
         }
 
-        let ws = Workspace::new(
-            output.clone(),
-            output_role,
-            clock.clone(),
-            options.clone(),
-        );
+        let ws = Workspace::new(output.clone(), output_role, clock.clone(), options.clone());
         workspaces.push(ws);
 
         Self {

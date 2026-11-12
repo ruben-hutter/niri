@@ -916,9 +916,7 @@ impl<W: LayoutElement> Layout<W> {
                 // workspace role anchors. The index stays valid after the monitor is pushed.
                 let ranked = ranked_monitors(&monitors, &self.outputs_config)
                     .into_iter()
-                    .chain(
-                        new_output_rank.map(|(role, pos)| (role, pos, new_output_idx)),
-                    )
+                    .chain(new_output_rank.map(|(role, pos)| (role, pos, new_output_idx)))
                     .collect::<Vec<_>>();
 
                 // The workspace the user is working on right now, if any. When docking into a
@@ -2931,9 +2929,10 @@ impl<W: LayoutElement> Layout<W> {
                 // connected. While its role is not connected, it camps wherever the last
                 // hotplug left it (usually the nearest role) until its role reconnects.
                 if let Some(anchor) = workspace.role_anchor {
-                    if ranked.iter().any(|&(role, _, mon_idx)| {
-                        role == anchor && mon_idx == idx
-                    }) {
+                    if ranked
+                        .iter()
+                        .any(|&(role, _, mon_idx)| role == anchor && mon_idx == idx)
+                    {
                         continue;
                     }
                     if let Some(anchor_idx) = monitor_with_role(&ranked, anchor) {
@@ -3374,7 +3373,8 @@ impl<W: LayoutElement> Layout<W> {
         // on each monitor.
         if let MonitorSet::Normal { monitors, .. } = &mut self.monitor_set {
             for mon in monitors {
-                mon.output_role = output_role(&mon.output, &self.outputs_config).map(|(role, _)| role);
+                mon.output_role =
+                    output_role(&mon.output, &self.outputs_config).map(|(role, _)| role);
             }
         }
 
@@ -3930,6 +3930,9 @@ impl<W: LayoutElement> Layout<W> {
         if current_idx == target_idx {
             // Just update the original output since this is an explicit movement action.
             current.workspaces[old_idx].original_outputs = vec![OutputId::new(&current.output)];
+            // Same for the role anchor: an explicit move to the output the workspace is
+            // already on re-anchors it to that output's role.
+            current.workspaces[old_idx].role_anchor = current.output_role;
 
             return false;
         }

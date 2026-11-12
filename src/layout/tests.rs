@@ -3375,10 +3375,8 @@ fn role_anchored_workspaces_survive_full_commute_to_work() {
         .collect();
     assert_eq!(with_windows, ["output2", "output2"]);
     assert!(
-        layout
-            .workspaces()
-            .all(|(mon, _, ws)| !ws.has_windows()
-                || mon.is_none_or(|mon| mon.output_name() != "output3")),
+        layout.workspaces().all(|(mon, _, ws)| !ws.has_windows()
+            || mon.is_none_or(|mon| mon.output_name() != "output3")),
         "no workspace may remain on the laptop"
     );
 
@@ -3536,8 +3534,65 @@ fn move_workspace_to_output_reanchors_role() {
     assert_eq!(with_windows, ["output3"]);
 
     // Moving the workspace back to the role-1 monitor re-anchors it to role 1.
-    check_ops_on_layout(&mut layout, [Op::FocusOutput(3), Op::MoveWorkspaceToOutput(1)]);
+    check_ops_on_layout(
+        &mut layout,
+        [Op::FocusOutput(3), Op::MoveWorkspaceToOutput(1)],
+    );
     check_ops_on_layout(&mut layout, [Op::RemoveOutput(1)]);
+    let with_windows: Vec<&str> = layout
+        .workspaces()
+        .filter(|(_, _, ws)| ws.has_windows())
+        .map(|(mon, _, _)| mon.unwrap().output_name().as_str())
+        .collect();
+    assert_eq!(with_windows, ["output2"]);
+
+    layout.verify_invariants();
+}
+
+#[test]
+fn move_workspace_to_current_output_reanchors_role() {
+    let mut config = Config::default();
+    config
+        .outputs
+        .0
+        .push(make_output_config("output1", Some(1)));
+    config
+        .outputs
+        .0
+        .push(make_output_config("output2", Some(2)));
+    config
+        .outputs
+        .0
+        .push(make_output_config("output3", Some(3)));
+
+    let mut layout = Layout::new(Clock::default(), &config);
+
+    check_ops_on_layout(
+        &mut layout,
+        [
+            Op::AddOutput(1),
+            Op::AddOutput(2),
+            Op::AddOutput(3),
+            Op::FocusOutput(1),
+            Op::AddWindow {
+                params: TestWindowParams::new(1),
+            },
+        ],
+    );
+
+    // Remove the role-1 monitor: the workspace camps on the nearest role, role 2.
+    check_ops_on_layout(&mut layout, [Op::RemoveOutput(1)]);
+    let with_windows: Vec<&str> = layout
+        .workspaces()
+        .filter(|(_, _, ws)| ws.has_windows())
+        .map(|(mon, _, _)| mon.unwrap().output_name().as_str())
+        .collect();
+    assert_eq!(with_windows, ["output2"]);
+
+    // Explicitly move it to the output it is already camping on: it must re-anchor to
+    // role 2, so docking the role-1 monitor later does not pull it away.
+    check_ops_on_layout(&mut layout, [Op::MoveWorkspaceToOutput(2)]);
+    check_ops_on_layout(&mut layout, [Op::AddOutput(1)]);
     let with_windows: Vec<&str> = layout
         .workspaces()
         .filter(|(_, _, ws)| ws.has_windows())
