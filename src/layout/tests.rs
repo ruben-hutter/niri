@@ -3261,8 +3261,9 @@ fn focused_workspace_follows_through_full_commute() {
     check_ops_on_layout(&mut layout, [Op::AddOutput(5)]);
     check_ops_on_layout(&mut layout, [Op::AddOutput(4)]);
 
-    // The focused workspace must have ended up on the home main monitor, together with the
-    // other camper workspaces in their original relative order.
+    // The focused workspace must have ended up on the home main monitor, and the work
+    // workspaces must have kept their roles: the role-1 window on the home main monitor, the
+    // role-2 windows on the home side monitor, none left on the laptop.
     assert_eq!(layout.active_output().unwrap().name(), "output4");
     let active_ws = layout.active_workspace().unwrap();
     assert!(active_ws.has_windows(), "the window must have followed");
@@ -3273,18 +3274,22 @@ fn focused_workspace_follows_through_full_commute() {
         .filter(|(_, _, ws)| ws.has_windows())
         .map(|(mon, _, _)| mon.unwrap().output_name().as_str())
         .collect();
-    assert_eq!(with_windows, ["output4", "output4"]);
+    assert_eq!(with_windows, ["output5", "output4"]);
 
-    // Both windows from output2 must be present on output4, and no camper may remain on the
-    // laptop.
-    let window_count: usize = layout
-        .workspaces()
-        .filter(|(mon, _, ws)| {
-            mon.is_some_and(|mon| mon.output_name() == "output4") && ws.has_windows()
-        })
-        .map(|(_, _, ws)| ws.windows().count())
-        .sum();
-    assert_eq!(window_count, 3);
+    let window_count = |output: &str| {
+        layout
+            .workspaces()
+            .filter(|(mon, _, ws)| {
+                mon.is_some_and(|mon| mon.output_name() == output) && ws.has_windows()
+            })
+            .map(|(_, _, ws)| ws.windows().count())
+            .sum::<usize>()
+    };
+    // The work main window on the home main monitor, the work side windows on the home side
+    // monitor (even though it connected first and became primary for a moment).
+    assert_eq!(window_count("output4"), 1);
+    assert_eq!(window_count("output5"), 2);
+    assert_eq!(window_count("output3"), 0);
 
     layout.verify_invariants();
 }
