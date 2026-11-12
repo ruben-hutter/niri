@@ -265,6 +265,10 @@ If several connected outputs share the lowest role, they are prioritized in the 
 
 Workspaces created on an output with a role are **anchored to the role**: they follow it between setups. When the output with that role connects, its workspaces move onto it (whatever monitor name or position the role has in the current setup, and even if the workspace was used on another monitor in between); when it disconnects, they camp on the nearest available role, keeping the anchor. Workspaces moved to another output with `move-workspace-to-output` re-anchor to that output's role (or lose the anchor if it has none). Outputs without a role keep the behavior described above.
 
+Outputs that are never connected at the same time (for example, two different docks) can share the same role. If several same-role outputs do end up connected simultaneously, the role resolves to the one that appears first in the config, and anchored workspaces follow it there. The other same-role outputs still take part in the ranking (for example, one of them takes over as the primary when the config-first one disconnects), but they never resolve as *the* monitor of that role. This is a runtime state, not a config validation error.
+
+For debugging role anchors, every anchor-driven workspace move is logged with its reason at debug level (`RUST_LOG=niri=debug`, visible for example in the journal), and each workspace's anchor is reported as `role_anchor` in `niri msg -j workspaces` and in the `WorkspacesChanged` event.
+
 For example, with a laptop and two external monitors, you can make the external monitors more important:
 
 ```kdl
