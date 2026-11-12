@@ -263,6 +263,8 @@ The connected output with the lowest role becomes the **primary monitor**:
 
 If several connected outputs share the lowest role, they are prioritized in the order that they appear in the config.
 
+Workspaces created on an output with a role are **anchored to the role**: they follow it between setups. When the output with that role connects, its workspaces move onto it (whatever monitor name or position the role has in the current setup, and even if the workspace was used on another monitor in between); when it disconnects, they camp on the nearest available role, keeping the anchor. Workspaces moved to another output with `move-workspace-to-output` re-anchor to that output's role (or lose the anchor if it has none). Outputs without a role keep the behavior described above.
+
 For example, with a laptop and two external monitors, you can make the external monitors more important:
 
 ```kdl
