@@ -50,6 +50,10 @@ const WORKSPACE_DND_EDGE_SCROLL_MOVEMENT: f64 = 1500.;
 pub struct Monitor<W: LayoutElement> {
     /// Output for this monitor.
     pub(super) output: Output,
+    /// Role configured for this output, if any.
+    ///
+    /// Decides the role anchor of workspaces created on this monitor.
+    pub(super) output_role: Option<u32>,
     /// Cached name of the output.
     output_name: String,
     /// Latest known scale for this output.
@@ -292,6 +296,7 @@ impl From<&super::OverviewProgress> for OverviewProgress {
 impl<W: LayoutElement> Monitor<W> {
     pub fn new(
         output: Output,
+        output_role: Option<u32>,
         mut workspaces: Vec<Workspace<W>>,
         ws_id_to_activate: Option<WorkspaceId>,
         clock: Clock,
@@ -320,16 +325,27 @@ impl<W: LayoutElement> Monitor<W> {
         }
 
         if options.layout.empty_workspace_above_first && !workspaces.is_empty() {
-            let ws = Workspace::new(output.clone(), clock.clone(), options.clone());
+            let ws = Workspace::new(
+                output.clone(),
+                output_role,
+                clock.clone(),
+                options.clone(),
+            );
             workspaces.insert(0, ws);
             active_workspace_idx += 1;
         }
 
-        let ws = Workspace::new(output.clone(), clock.clone(), options.clone());
+        let ws = Workspace::new(
+            output.clone(),
+            output_role,
+            clock.clone(),
+            options.clone(),
+        );
         workspaces.push(ws);
 
         Self {
             output_name: output.name(),
+            output_role,
             output,
             scale,
             view_size,
@@ -415,6 +431,7 @@ impl<W: LayoutElement> Monitor<W> {
     pub fn add_workspace_at(&mut self, idx: usize) {
         let ws = Workspace::new(
             self.output.clone(),
+            self.output_role,
             self.clock.clone(),
             self.options.clone(),
         );

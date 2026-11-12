@@ -60,6 +60,14 @@ pub struct Workspace<W: LayoutElement> {
     /// disconnection, they may remain pointing to disconnected outputs.
     pub(super) original_outputs: Vec<OutputId>,
 
+    /// The role of the output this workspace is anchored to, if any.
+    ///
+    /// Set when the workspace is created on an output with a configured role, and re-set only
+    /// on an explicit move to another output. Unlike `original_outputs`, merely using the
+    /// workspace on another output (for example, on the laptop while commuting) does not
+    /// re-anchor it, so the workspace returns to its role when docking back.
+    pub(super) role_anchor: Option<u32>,
+
     /// Current output of this workspace.
     output: Option<Output>,
 
@@ -207,12 +215,18 @@ impl FloatingActive {
 }
 
 impl<W: LayoutElement> Workspace<W> {
-    pub fn new(output: Output, clock: Clock, options: Rc<Options>) -> Self {
-        Self::new_with_config(output, None, clock, options)
+    pub fn new(
+        output: Output,
+        role_anchor: Option<u32>,
+        clock: Clock,
+        options: Rc<Options>,
+    ) -> Self {
+        Self::new_with_config(output, role_anchor, None, clock, options)
     }
 
     pub fn new_with_config(
         output: Output,
+        role_anchor: Option<u32>,
         mut config: Option<WorkspaceConfig>,
         clock: Clock,
         base_options: Rc<Options>,
@@ -263,6 +277,7 @@ impl<W: LayoutElement> Workspace<W> {
             floating,
             floating_is_active: FloatingActive::No,
             original_outputs,
+            role_anchor,
             scale,
             transform: output.current_transform(),
             view_size,
@@ -328,6 +343,7 @@ impl<W: LayoutElement> Workspace<W> {
             scale,
             transform: Transform::Normal,
             original_outputs,
+            role_anchor: None,
             view_size,
             working_area,
             shadow: Shadow::new(shadow_config),

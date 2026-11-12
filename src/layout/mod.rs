@@ -812,6 +812,8 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn add_output(&mut self, output: Output, layout_config: Option<LayoutPart>) {
+        let new_output_role = output_role(&output, &self.outputs_config).map(|(role, _)| role);
+
         self.monitor_set = match mem::take(&mut self.monitor_set) {
             MonitorSet::Normal {
                 mut monitors,
@@ -907,6 +909,7 @@ impl<W: LayoutElement> Layout<W> {
 
                 let mut monitor = Monitor::new(
                     output,
+                    new_output_role,
                     workspaces,
                     ws_id_to_activate,
                     self.clock.clone(),
@@ -1009,6 +1012,7 @@ impl<W: LayoutElement> Layout<W> {
 
                 let mut monitor = Monitor::new(
                     output,
+                    new_output_role,
                     workspaces,
                     ws_id_to_activate,
                     self.clock.clone(),
@@ -3212,6 +3216,7 @@ impl<W: LayoutElement> Layout<W> {
 
                 let ws = Workspace::new_with_config(
                     mon.output.clone(),
+                    mon.output_role,
                     Some(ws_config.clone()),
                     clock,
                     options,
@@ -3228,6 +3233,14 @@ impl<W: LayoutElement> Layout<W> {
 
     pub fn update_config(&mut self, config: &Config) {
         self.outputs_config = config.outputs.clone();
+
+        // Refresh the cached output roles: they decide the role anchor of workspaces created
+        // on each monitor.
+        if let MonitorSet::Normal { monitors, .. } = &mut self.monitor_set {
+            for mon in monitors {
+                mon.output_role = output_role(&mon.output, &self.outputs_config).map(|(role, _)| role);
+            }
+        }
 
         // Update workspace-specific config for all named workspaces.
         for ws in self.workspaces_mut() {
