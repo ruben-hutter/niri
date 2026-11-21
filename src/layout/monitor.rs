@@ -50,6 +50,10 @@ const WORKSPACE_DND_EDGE_SCROLL_MOVEMENT: f64 = 1500.;
 pub struct Monitor<W: LayoutElement> {
     /// Output for this monitor.
     pub(super) output: Output,
+    /// Role configured for this output, if any.
+    ///
+    /// Decides the role anchor of workspaces created on this monitor.
+    pub(super) output_role: Option<u32>,
     /// Cached name of the output.
     output_name: String,
     /// Latest known scale for this output.
@@ -292,6 +296,7 @@ impl From<&super::OverviewProgress> for OverviewProgress {
 impl<W: LayoutElement> Monitor<W> {
     pub fn new(
         output: Output,
+        output_role: Option<u32>,
         mut workspaces: Vec<Workspace<W>>,
         ws_id_to_activate: Option<WorkspaceId>,
         clock: Clock,
@@ -320,16 +325,17 @@ impl<W: LayoutElement> Monitor<W> {
         }
 
         if options.layout.empty_workspace_above_first && !workspaces.is_empty() {
-            let ws = Workspace::new(output.clone(), clock.clone(), options.clone());
+            let ws = Workspace::new(output.clone(), output_role, clock.clone(), options.clone());
             workspaces.insert(0, ws);
             active_workspace_idx += 1;
         }
 
-        let ws = Workspace::new(output.clone(), clock.clone(), options.clone());
+        let ws = Workspace::new(output.clone(), output_role, clock.clone(), options.clone());
         workspaces.push(ws);
 
         Self {
             output_name: output.name(),
+            output_role,
             output,
             scale,
             view_size,
@@ -415,6 +421,7 @@ impl<W: LayoutElement> Monitor<W> {
     pub fn add_workspace_at(&mut self, idx: usize) {
         let ws = Workspace::new(
             self.output.clone(),
+            self.output_role,
             self.clock.clone(),
             self.options.clone(),
         );
@@ -778,10 +785,42 @@ impl<W: LayoutElement> Monitor<W> {
             self.active_workspace_idx = self.workspaces.len() - 1;
         }
 
+        self.finish_adding_workspaces();
+    }
+
+    /// Finishes adding workspaces to this monitor, whether appended or prepended.
+    fn finish_adding_workspaces(&mut self) {
+        // If empty_workspace_above_first is set and the first workspace is now no longer empty,
+        // add a new empty workspace on top.
+        if self.options.layout.empty_workspace_above_first
+            && self.workspaces[0].has_windows_or_name()
+        {
+            self.add_workspace_top();
+        }
+
         // FIXME: if we're adding workspaces to currently invisible positions
         // (outside the workspace switch), we don't need to cancel it.
         self.workspace_switch = None;
         self.clean_up_workspaces();
+    }
+
+    /// Like [`append_workspaces()`], but inserts the workspaces in front of the existing ones,
+    /// keeping the currently focused workspace focused.
+    pub fn prepend_workspaces(&mut self, mut workspaces: Vec<Workspace<W>>) {
+        if workspaces.is_empty() {
+            return;
+        }
+
+        for ws in &mut workspaces {
+            ws.set_output(Some(self.output.clone()));
+            ws.update_config(self.options.clone());
+        }
+
+        let count = workspaces.len();
+        self.workspaces.splice(0..0, workspaces);
+        self.active_workspace_idx += count;
+
+        self.finish_adding_workspaces();
     }
 
     pub fn move_down_or_to_workspace_down(&mut self) {

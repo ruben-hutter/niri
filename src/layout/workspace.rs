@@ -16,6 +16,7 @@ use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Point, Rectangle, Serial, Size, Transform};
 use smithay::wayland::compositor::with_states;
 use smithay::wayland::shell::xdg::SurfaceCachedState;
+use tracing::debug;
 
 use super::floating::{FloatingSpace, FloatingSpaceRenderElement};
 use super::scrolling::{
@@ -59,6 +60,14 @@ pub struct Workspace<W: LayoutElement> {
     /// Most of the time this will be the workspace's current output, however, after an output
     /// disconnection, they may remain pointing to disconnected outputs.
     pub(super) original_outputs: Vec<OutputId>,
+
+    /// The role of the output this workspace is anchored to, if any.
+    ///
+    /// Set when the workspace is created on an output with a configured role, and re-set only
+    /// on an explicit move to another output. Unlike `original_outputs`, merely using the
+    /// workspace on another output (for example, on the laptop while commuting) does not
+    /// re-anchor it, so the workspace returns to its role when docking back.
+    pub(super) role_anchor: Option<u32>,
 
     /// Current output of this workspace.
     output: Option<Output>,
@@ -207,12 +216,18 @@ impl FloatingActive {
 }
 
 impl<W: LayoutElement> Workspace<W> {
-    pub fn new(output: Output, clock: Clock, options: Rc<Options>) -> Self {
-        Self::new_with_config(output, None, clock, options)
+    pub fn new(
+        output: Output,
+        role_anchor: Option<u32>,
+        clock: Clock,
+        options: Rc<Options>,
+    ) -> Self {
+        Self::new_with_config(output, role_anchor, None, clock, options)
     }
 
     pub fn new_with_config(
         output: Output,
+        role_anchor: Option<u32>,
         mut config: Option<WorkspaceConfig>,
         clock: Clock,
         base_options: Rc<Options>,
@@ -258,11 +273,12 @@ impl<W: LayoutElement> Workspace<W> {
         let shadow_config =
             compute_workspace_shadow_config(options.overview.workspace_shadow, view_size);
 
-        Self {
+        let workspace = Self {
             scrolling,
             floating,
             floating_is_active: FloatingActive::No,
             original_outputs,
+            role_anchor,
             scale,
             transform: output.current_transform(),
             view_size,
@@ -276,7 +292,16 @@ impl<W: LayoutElement> Workspace<W> {
             name: config.map(|c| c.name.0),
             layout_config,
             id: WorkspaceId::next(),
+        };
+
+        if let Some(role) = workspace.role_anchor {
+            debug!(
+                "workspace {} anchored to role {role}",
+                super::ws_label(&workspace)
+            );
         }
+
+        workspace
     }
 
     pub fn new_with_config_no_outputs(
@@ -328,6 +353,7 @@ impl<W: LayoutElement> Workspace<W> {
             scale,
             transform: Transform::Normal,
             original_outputs,
+            role_anchor: None,
             view_size,
             working_area,
             shadow: Shadow::new(shadow_config),
@@ -351,6 +377,10 @@ impl<W: LayoutElement> Workspace<W> {
 
     pub fn name(&self) -> Option<&String> {
         self.name.as_ref()
+    }
+
+    pub fn role_anchor(&self) -> Option<u32> {
+        self.role_anchor
     }
 
     pub fn unname(&mut self) {

@@ -622,6 +622,7 @@ impl State {
             if ipc_ws.idx != u8::try_from(ws_idx + 1).unwrap_or(u8::MAX)
                 || ipc_ws.name.as_ref() != ws.name()
                 || ipc_ws.output.as_ref() != output_name
+                || ipc_ws.role_anchor != ws.role_anchor()
             {
                 need_workspaces_changed = true;
                 break;
@@ -672,6 +673,7 @@ impl State {
                         idx: u8::try_from(ws_idx + 1).unwrap_or(u8::MAX),
                         name: ws.name().cloned(),
                         output: mon.map(|mon| mon.output_name().clone()),
+                        role_anchor: ws.role_anchor(),
                         is_urgent: ws.is_urgent(),
                         is_active: mon.is_some_and(|mon| mon.active_workspace_idx() == ws_idx),
                         is_focused: Some(id) == focused_ws_id,

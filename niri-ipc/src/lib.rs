@@ -1555,6 +1555,12 @@ pub struct Workspace {
     ///
     /// Can be `None` if no outputs are currently connected.
     pub output: Option<String>,
+    /// The role this workspace is anchored to, if any.
+    ///
+    /// This is set for workspaces on outputs with a configured role, and it is kept while
+    /// such an output is disconnected: the workspace follows the role between setups. It is
+    /// `None` if the workspace is not anchored to any role.
+    pub role_anchor: Option<u32>,
     /// Whether the workspace currently has an urgent window in its output.
     pub is_urgent: bool,
     /// Whether the workspace is currently active on its output.

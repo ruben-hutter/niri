@@ -69,6 +69,12 @@ pub struct Output {
     pub variable_refresh_rate: Option<Vrr>,
     #[knuffel(child)]
     pub focus_at_startup: bool,
+    /// Role of this output: lower role means a more important output.
+    ///
+    /// The connected output with the lowest role becomes the primary monitor, which is focused
+    /// by default at startup and receives orphaned workspaces.
+    #[knuffel(child, unwrap(argument))]
+    pub role: Option<u32>,
     // Deprecated; use layout.background_color.
     #[knuffel(child)]
     pub background_color: Option<Color>,
@@ -99,6 +105,7 @@ impl Default for Output {
         Self {
             off: false,
             focus_at_startup: false,
+            role: None,
             name: String::new(),
             scale: None,
             transform: Transform::Normal,
@@ -148,7 +155,22 @@ impl FromIterator<Output> for Outputs {
 
 impl Outputs {
     pub fn find(&self, name: &OutputName) -> Option<&Output> {
-        self.0.iter().find(|o| name.matches(&o.name))
+        self.find_with_position(name).map(|(_, o)| o)
+    }
+
+    /// Like [`find()`], but also returns the position of the matched output in the config.
+    pub fn find_with_position(&self, name: &OutputName) -> Option<(usize, &Output)> {
+        self.0
+            .iter()
+            .enumerate()
+            .find(|(_, o)| name.matches(&o.name))
+    }
+
+    /// Returns the role of the output matching `name`, together with its position in the config
+    /// (used as the tie-breaker between equal roles).
+    pub fn role_rank(&self, name: &OutputName) -> Option<(u32, usize)> {
+        let (pos, o) = self.find_with_position(name)?;
+        o.role.map(|role| (role, pos))
     }
 
     pub fn find_mut(&mut self, name: &OutputName) -> Option<&mut Output> {
